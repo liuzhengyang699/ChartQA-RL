@@ -1,0 +1,33 @@
+{
+  "num_examples": 3272,
+  "metrics": {
+    "base": {
+      "exact_match": 72.0,
+      "relaxed_match": 84.7,
+      "avg_similarity": 90.6
+    },
+    "sft": {
+      "exact_match": 74.8,
+      "relaxed_match": 86.8,
+      "avg_similarity": 92.0
+    }
+  },
+  "diff": {
+    "exact": {
+      "improved": 158,
+      "regressed": 66,
+      "same": 3048
+    },
+    "relaxed": {
+      "improved": 124,
+      "regressed": 56,
+      "same": 3092
+    },
+    "similarity": {
+      "improved": 344,
+      "regressed": 225,
+      "same": 2703,
+      "avg_delta": 0.0141
+    }
+  }
+}

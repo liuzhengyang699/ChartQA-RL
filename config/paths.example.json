@@ -1,0 +1,14 @@
+{
+  "model_root": "/data/models/chart-qa",
+  "data_root": "/data/datasets/chart-qa",
+  "base_model_dir": "/data/models/chart-qa/base/Qwen3-VL-4B-Instruct",
+  "sft_root": "/data/models/chart-qa/sft/qwen3vl4b_chartqa_sft",
+  "sft_adapter_dir": "/data/models/chart-qa/sft/qwen3vl4b_chartqa_sft/adapter",
+  "sft_merged_dir": "/data/models/chart-qa/sft/qwen3vl4b_chartqa_sft/merged",
+  "sft_eval_dir": "/data/models/chart-qa/sft/qwen3vl4b_chartqa_sft/eval",
+  "rl_checkpoint_dir": "/data/models/chart-qa/rl/checkpoints/qwen3vl4b_chartqa_rl",
+  "chartqa_parquet_dir": "/data/datasets/chart-qa/chartqa",
+  "hf_cache_dir": "/data/datasets/chart-qa/cache/huggingface",
+  "rl_raw_dir": "/data/datasets/chart-qa/raw/chartqa_rl",
+  "rl_parquet_dir": "/data/datasets/chart-qa/rl"
+}

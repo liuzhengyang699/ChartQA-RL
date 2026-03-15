@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="760" viewBox="0 0 1280 760" fill="none">
+<defs>
+<linearGradient id="bg2" x1="0" y1="0" x2="1" y2="1">
+<stop offset="0%" stop-color="#FFFDF8"/>
+<stop offset="100%" stop-color="#FFF6EB"/>
+</linearGradient>
+</defs>
+<rect width="1280" height="760" rx="28" fill="url(#bg2)"/>
+<text x="64" y="84" fill="#111827" font-size="36" font-family="Arial, Helvetica, sans-serif" font-weight="700">Sample-Level Change Breakdown</text>
+<text x="64" y="122" fill="#4B5563" font-size="18" font-family="Arial, Helvetica, sans-serif">Improvement and regression counts plus similarity delta distribution</text>
+<rect x="64" y="164" width="352" height="186" rx="24" fill="#F8FAFC"/>
+<text x="88" y="202" fill="#111827" font-size="24" font-family="Arial, Helvetica, sans-serif" font-weight="700">Exact Match</text>
+<circle cx="92" cy="232" r="6" fill="#16A34A"/>
+<text x="108" y="238" fill="#475569" font-size="16" font-family="Arial, Helvetica, sans-serif">Improved</text>
+<text x="390" y="238" text-anchor="end" fill="#111827" font-size="18" font-family="Arial, Helvetica, sans-serif" font-weight="700">158</text>
+<circle cx="92" cy="270" r="6" fill="#DC2626"/>
+<text x="108" y="276" fill="#475569" font-size="16" font-family="Arial, Helvetica, sans-serif">Regressed</text>
+<text x="390" y="276" text-anchor="end" fill="#111827" font-size="18" font-family="Arial, Helvetica, sans-serif" font-weight="700">66</text>
+<circle cx="92" cy="308" r="6" fill="#94A3B8"/>
+<text x="108" y="314" fill="#475569" font-size="16" font-family="Arial, Helvetica, sans-serif">Same</text>
+<text x="390" y="314" text-anchor="end" fill="#111827" font-size="18" font-family="Arial, Helvetica, sans-serif" font-weight="700">3048</text>
+<rect x="448" y="164" width="352" height="186" rx="24" fill="#F8FAFC"/>
+<text x="472" y="202" fill="#111827" font-size="24" font-family="Arial, Helvetica, sans-serif" font-weight="700">Relaxed Match</text>
+<circle cx="476" cy="232" r="6" fill="#16A34A"/>
+<text x="492" y="238" fill="#475569" font-size="16" font-family="Arial, Helvetica, sans-serif">Improved</text>
+<text x="774" y="238" text-anchor="end" fill="#111827" font-size="18" font-family="Arial, Helvetica, sans-serif" font-weight="700">124</text>
+<circle cx="476" cy="270" r="6" fill="#DC2626"/>
+<text x="492" y="276" fill="#475569" font-size="16" font-family="Arial, Helvetica, sans-serif">Regressed</text>
+<text x="774" y="276" text-anchor="end" fill="#111827" font-size="18" font-family="Arial, Helvetica, sans-serif" font-weight="700">56</text>
+<circle cx="476" cy="308" r="6" fill="#94A3B8"/>
+<text x="492" y="314" fill="#475569" font-size="16" font-family="Arial, Helvetica, sans-serif">Same</text>
+<text x="774" y="314" text-anchor="end" fill="#111827" font-size="18" font-family="Arial, Helvetica, sans-serif" font-weight="700">3092</text>
+<rect x="832" y="164" width="352" height="186" rx="24" fill="#F8FAFC"/>
+<text x="856" y="202" fill="#111827" font-size="24" font-family="Arial, Helvetica, sans-serif" font-weight="700">Similarity</text>
+<circle cx="860" cy="232" r="6" fill="#16A34A"/>
+<text x="876" y="238" fill="#475569" font-size="16" font-family="Arial, Helvetica, sans-serif">Up</text>
+<text x="1158" y="238" text-anchor="end" fill="#111827" font-size="18" font-family="Arial, Helvetica, sans-serif" font-weight="700">344</text>
+<circle cx="860" cy="270" r="6" fill="#DC2626"/>
+<text x="876" y="276" fill="#475569" font-size="16" font-family="Arial, Helvetica, sans-serif">Down</text>
+<text x="1158" y="276" text-anchor="end" fill="#111827" font-size="18" font-family="Arial, Helvetica, sans-serif" font-weight="700">225</text>
+<circle cx="860" cy="308" r="6" fill="#94A3B8"/>
+<text x="876" y="314" fill="#475569" font-size="16" font-family="Arial, Helvetica, sans-serif">Same</text>
+<text x="1158" y="314" text-anchor="end" fill="#111827" font-size="18" font-family="Arial, Helvetica, sans-serif" font-weight="700">2703</text>
+<text x="856" y="330" fill="#64748B" font-size="15" font-family="Arial, Helvetica, sans-serif">Mean delta +0.0141</text>
+<rect x="64" y="388" width="1152" height="312" rx="28" fill="white" fill-opacity="0.7"/>
+<line x1="90" y1="670" x2="1190" y2="670" stroke="#CBD5E1" stroke-width="2"/>
+<line x1="640.0" y1="418" x2="640.0" y2="670" stroke="#94A3B8" stroke-dasharray="8 8" stroke-width="2"/>
+<line x1="90" y1="670.0" x2="1190" y2="670.0" stroke="#E5E7EB" stroke-width="1"/>
+<text x="76" y="675.0" text-anchor="end" fill="#64748B" font-size="13" font-family="Arial, Helvetica, sans-serif">0</text>
+<line x1="90" y1="610.0" x2="1190" y2="610.0" stroke="#E5E7EB" stroke-width="1"/>
+<text x="76" y="615.0" text-anchor="end" fill="#64748B" font-size="13" font-family="Arial, Helvetica, sans-serif">756</text>
+<line x1="90" y1="550.1" x2="1190" y2="550.1" stroke="#E5E7EB" stroke-width="1"/>
+<text x="76" y="555.1" text-anchor="end" fill="#64748B" font-size="13" font-family="Arial, Helvetica, sans-serif">1512</text>
+<line x1="90" y1="490.1" x2="1190" y2="490.1" stroke="#E5E7EB" stroke-width="1"/>
+<text x="76" y="495.1" text-anchor="end" fill="#64748B" font-size="13" font-family="Arial, Helvetica, sans-serif">2268</text>
+<line x1="90" y1="430.2" x2="1190" y2="430.2" stroke="#E5E7EB" stroke-width="1"/>
+<text x="76" y="435.2" text-anchor="end" fill="#64748B" font-size="13" font-family="Arial, Helvetica, sans-serif">3024</text>
+<rect x="94.0" y="668.0" width="56.7" height="2.0" rx="10" fill="#DC2626" fill-opacity="0.85"/>
+<rect x="158.7" y="669.7" width="56.7" height="0.3" rx="10" fill="#DC2626" fill-opacity="0.85"/>
+<rect x="223.4" y="669.8" width="56.7" height="0.2" rx="10" fill="#DC2626" fill-opacity="0.85"/>
+<rect x="288.1" y="669.9" width="56.7" height="0.1" rx="10" fill="#DC2626" fill-opacity="0.85"/>
+<rect x="352.8" y="669.8" width="56.7" height="0.2" rx="10" fill="#DC2626" fill-opacity="0.85"/>
+<rect x="417.5" y="669.5" width="56.7" height="0.5" rx="10" fill="#DC2626" fill-opacity="0.85"/>
+<rect x="482.2" y="669.1" width="56.7" height="0.9" rx="10" fill="#DC2626" fill-opacity="0.85"/>
+<rect x="546.9" y="667.5" width="56.7" height="2.5" rx="10" fill="#DC2626" fill-opacity="0.85"/>
+<rect x="611.6" y="430.0" width="56.7" height="240.0" rx="10" fill="#16A34A" fill-opacity="0.85"/>
+<rect x="676.4" y="666.4" width="56.7" height="3.6" rx="10" fill="#16A34A" fill-opacity="0.85"/>
+<rect x="741.1" y="668.6" width="56.7" height="1.4" rx="10" fill="#16A34A" fill-opacity="0.85"/>
+<rect x="805.8" y="669.1" width="56.7" height="0.9" rx="10" fill="#16A34A" fill-opacity="0.85"/>
+<rect x="870.5" y="668.9" width="56.7" height="1.1" rx="10" fill="#16A34A" fill-opacity="0.85"/>
+<rect x="935.2" y="669.3" width="56.7" height="0.7" rx="10" fill="#16A34A" fill-opacity="0.85"/>
+<rect x="999.9" y="669.3" width="56.7" height="0.7" rx="10" fill="#16A34A" fill-opacity="0.85"/>
+<rect x="1064.6" y="669.5" width="56.7" height="0.5" rx="10" fill="#16A34A" fill-opacity="0.85"/>
+<rect x="1129.3" y="666.1" width="56.7" height="3.9" rx="10" fill="#16A34A" fill-opacity="0.85"/>
+<text x="90.0" y="698" text-anchor="middle" fill="#64748B" font-size="13" font-family="Arial, Helvetica, sans-serif">-1.0</text>
+<text x="365.0" y="698" text-anchor="middle" fill="#64748B" font-size="13" font-family="Arial, Helvetica, sans-serif">-0.5</text>
+<text x="640.0" y="698" text-anchor="middle" fill="#64748B" font-size="13" font-family="Arial, Helvetica, sans-serif">+0.0</text>
+<text x="915.0" y="698" text-anchor="middle" fill="#64748B" font-size="13" font-family="Arial, Helvetica, sans-serif">+0.5</text>
+<text x="1190.0" y="698" text-anchor="middle" fill="#64748B" font-size="13" font-family="Arial, Helvetica, sans-serif">+1.0</text>
+<text x="90" y="416" fill="#111827" font-size="22" font-family="Arial, Helvetica, sans-serif" font-weight="700">Similarity delta histogram</text>
+<text x="90" y="446" fill="#64748B" font-size="15" font-family="Arial, Helvetica, sans-serif">Delta = SFT similarity score - Base similarity score</text>
+<text x="1146" y="416" fill="#16A34A" font-size="15" font-family="Arial, Helvetica, sans-serif" text-anchor="end">positive deltas</text>
+<text x="1146" y="438" fill="#DC2626" font-size="15" font-family="Arial, Helvetica, sans-serif" text-anchor="end">negative deltas</text>
+</svg>

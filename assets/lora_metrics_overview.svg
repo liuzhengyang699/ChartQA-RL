@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" fill="none">
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+<stop offset="0%" stop-color="#F8FBFF"/>
+<stop offset="100%" stop-color="#EDF3FF"/>
+</linearGradient>
+</defs>
+<rect width="1280" height="720" rx="28" fill="url(#bg)"/>
+<text x="64" y="84" fill="#0F172A" font-size="36" font-family="Arial, Helvetica, sans-serif" font-weight="700">ChartQA LoRA Evaluation</text>
+<text x="64" y="122" fill="#475569" font-size="18" font-family="Arial, Helvetica, sans-serif">Base vs SFT metrics on the ChartQA test split</text>
+<rect x="64" y="156" width="258" height="106" rx="24" fill="#F7F9FC"/>
+<text x="88" y="196" fill="#64748B" font-size="16" font-family="Arial, Helvetica, sans-serif">Examples</text>
+<text x="88" y="235" fill="#0F172A" font-size="30" font-family="Arial, Helvetica, sans-serif" font-weight="700">3272</text>
+<rect x="354" y="156" width="258" height="106" rx="24" fill="#F7F9FC"/>
+<text x="378" y="196" fill="#64748B" font-size="16" font-family="Arial, Helvetica, sans-serif">Exact Gain</text>
+<text x="378" y="235" fill="#0F172A" font-size="30" font-family="Arial, Helvetica, sans-serif" font-weight="700">+158 / -66</text>
+<rect x="644" y="156" width="258" height="106" rx="24" fill="#F7F9FC"/>
+<text x="668" y="196" fill="#64748B" font-size="16" font-family="Arial, Helvetica, sans-serif">Relaxed Gain</text>
+<text x="668" y="235" fill="#0F172A" font-size="30" font-family="Arial, Helvetica, sans-serif" font-weight="700">+124 / -56</text>
+<rect x="934" y="156" width="258" height="106" rx="24" fill="#F7F9FC"/>
+<text x="958" y="196" fill="#64748B" font-size="16" font-family="Arial, Helvetica, sans-serif">Avg Delta</text>
+<text x="958" y="235" fill="#0F172A" font-size="30" font-family="Arial, Helvetica, sans-serif" font-weight="700">+0.0141</text>
+<line x1="84" y1="618.0" x2="1184" y2="618.0" stroke="#D8E2F0" stroke-width="1"/>
+<text x="68" y="624.0" text-anchor="end" fill="#64748B" font-size="14" font-family="Arial, Helvetica, sans-serif">0%</text>
+<line x1="84" y1="562.0" x2="1184" y2="562.0" stroke="#D8E2F0" stroke-width="1"/>
+<text x="68" y="568.0" text-anchor="end" fill="#64748B" font-size="14" font-family="Arial, Helvetica, sans-serif">20%</text>
+<line x1="84" y1="506.0" x2="1184" y2="506.0" stroke="#D8E2F0" stroke-width="1"/>
+<text x="68" y="512.0" text-anchor="end" fill="#64748B" font-size="14" font-family="Arial, Helvetica, sans-serif">40%</text>
+<line x1="84" y1="450.0" x2="1184" y2="450.0" stroke="#D8E2F0" stroke-width="1"/>
+<text x="68" y="456.0" text-anchor="end" fill="#64748B" font-size="14" font-family="Arial, Helvetica, sans-serif">60%</text>
+<line x1="84" y1="394.0" x2="1184" y2="394.0" stroke="#D8E2F0" stroke-width="1"/>
+<text x="68" y="400.0" text-anchor="end" fill="#64748B" font-size="14" font-family="Arial, Helvetica, sans-serif">80%</text>
+<line x1="84" y1="338.0" x2="1184" y2="338.0" stroke="#D8E2F0" stroke-width="1"/>
+<text x="68" y="344.0" text-anchor="end" fill="#64748B" font-size="14" font-family="Arial, Helvetica, sans-serif">100%</text>
+<rect x="174.0" y="416.4" width="92" height="201.6" rx="22" fill="#B8C4D6"/>
+<rect x="296.0" y="408.6" width="92" height="209.4" rx="22" fill="#1677FF"/>
+<text x="220.0" y="402.4" text-anchor="middle" fill="#334155" font-size="16" font-family="Arial, Helvetica, sans-serif">72.0%</text>
+<text x="342.0" y="394.6" text-anchor="middle" fill="#0F172A" font-size="16" font-family="Arial, Helvetica, sans-serif" font-weight="700">74.8%</text>
+<text x="281.0" y="656" text-anchor="middle" fill="#334155" font-size="18" font-family="Arial, Helvetica, sans-serif">Exact Match</text>
+<text x="220.0" y="686" text-anchor="middle" fill="#64748B" font-size="14" font-family="Arial, Helvetica, sans-serif">Base</text>
+<text x="342.0" y="686" text-anchor="middle" fill="#64748B" font-size="14" font-family="Arial, Helvetica, sans-serif">SFT</text>
+<rect x="540.6666666666667" y="380.8" width="92" height="237.2" rx="22" fill="#B8C4D6"/>
+<rect x="662.6666666666667" y="375.0" width="92" height="243.0" rx="22" fill="#1677FF"/>
+<text x="586.6666666666667" y="366.8" text-anchor="middle" fill="#334155" font-size="16" font-family="Arial, Helvetica, sans-serif">84.7%</text>
+<text x="708.6666666666667" y="361.0" text-anchor="middle" fill="#0F172A" font-size="16" font-family="Arial, Helvetica, sans-serif" font-weight="700">86.8%</text>
+<text x="647.6666666666667" y="656" text-anchor="middle" fill="#334155" font-size="18" font-family="Arial, Helvetica, sans-serif">Relaxed Match</text>
+<text x="586.6666666666667" y="686" text-anchor="middle" fill="#64748B" font-size="14" font-family="Arial, Helvetica, sans-serif">Base</text>
+<text x="708.6666666666667" y="686" text-anchor="middle" fill="#64748B" font-size="14" font-family="Arial, Helvetica, sans-serif">SFT</text>
+<rect x="907.3333333333334" y="364.3" width="92" height="253.7" rx="22" fill="#B8C4D6"/>
+<rect x="1029.3333333333335" y="360.4" width="92" height="257.6" rx="22" fill="#1677FF"/>
+<text x="953.3333333333334" y="350.3" text-anchor="middle" fill="#334155" font-size="16" font-family="Arial, Helvetica, sans-serif">90.6%</text>
+<text x="1075.3333333333335" y="346.4" text-anchor="middle" fill="#0F172A" font-size="16" font-family="Arial, Helvetica, sans-serif" font-weight="700">92.0%</text>
+<text x="1014.3333333333334" y="656" text-anchor="middle" fill="#334155" font-size="18" font-family="Arial, Helvetica, sans-serif">Avg Similarity</text>
+<text x="953.3333333333334" y="686" text-anchor="middle" fill="#64748B" font-size="14" font-family="Arial, Helvetica, sans-serif">Base</text>
+<text x="1075.3333333333335" y="686" text-anchor="middle" fill="#64748B" font-size="14" font-family="Arial, Helvetica, sans-serif">SFT</text>
+<rect x="944" y="58" width="18" height="18" rx="9" fill="#B8C4D6"/>
+<text x="972" y="73" fill="#334155" font-size="16" font-family="Arial, Helvetica, sans-serif">Base</text>
+<rect x="1050" y="58" width="18" height="18" rx="9" fill="#1677FF"/>
+<text x="1078" y="73" fill="#334155" font-size="16" font-family="Arial, Helvetica, sans-serif">SFT</text>
+</svg>

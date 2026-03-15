@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.mypy_cache/
+
+# Environments
+.env
+.venv/
+venv/
+env/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Project artifacts
+.cache/
+data/
+models/
+outputs/
+config/paths.json
+RL/datasets/
+RL/judge/judge_info.json
+
+# Large files
+*.safetensors
+*.pt
+*.pth
+*.bin
+*.ckpt
+*.parquet
+*.zip
+
+# Logs
+swanlog/
+wandb/
+mlruns/
+tensorboard_log/
+
+# Local notebooks
+.ipynb_checkpoints/
