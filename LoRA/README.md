@@ -24,6 +24,8 @@ cd /abs/path/to/chartqa-rl
 | `LoRA/download_data.sh` | 下载 `swift/ChartQA` parquet 数据到 `chartqa_parquet_dir` |
 | `LoRA/configs/chartqa_qwen3vl4b.json` | SFT 与评测默认超参配置 |
 | `LoRA/accelerate_config.yaml` | 可选的多卡 `accelerate` 配置模板 |
+| `data/chartqa/sft.py` | LoRA 与评测共用的 ChartQA parquet 加载、split 与 message 构造 |
+| `data/chartqa/common.py` | LoRA 与 RL 共用的答案归一化与匹配逻辑 |
 
 ## 路径与配置
 
@@ -44,6 +46,8 @@ cp config/paths.example.json config/paths.json
 | `sft_adapter_dir` | 训练结束后保存的 adapter 目录 |
 | `sft_merged_dir` | merge 后完整模型目录 |
 | `sft_eval_dir` | 离线评测结果目录 |
+
+底层 ChartQA 数据加载、split 与答案匹配逻辑已经统一抽到 [`data/chartqa/`](../data/README.md)。LoRA 目录本身只保留训练、merge、评测和可视化入口。
 
 SFT 默认配置文件为 [`LoRA/configs/chartqa_qwen3vl4b.json`](./configs/chartqa_qwen3vl4b.json)，字段分组如下：
 

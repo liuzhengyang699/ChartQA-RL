@@ -4,7 +4,7 @@
 
 ## 概览
 
-这一部分实现面向 ChartQA 的工具增强多模态强化学习流程，训练框架基于 `VeRL + GRPO`。默认链路不是自由形式 Python tool call，而是显式的两阶段 structured RL：
+这一部分实现面向 ChartQA 的工具增强多模态强化学习流程，训练框架基于 `VeRL + GRPO`。底层仍沿用 VeRL 的 PPO-family trainer skeleton（代码里会看到 `RayPPOTrainer`），但当前实验算法口径是 `adv_estimator=grpo`。默认链路不是自由形式 Python tool call，而是显式的两阶段 structured RL：
 
 1. `action branch` 先输出结构化动作 JSON
 2. `baseline branch` 在原图上直接回答问题
@@ -36,8 +36,10 @@ cd /abs/path/to/chartqa-rl
 | --- | --- |
 | `RL/train.sh` | RL 主训练入口，负责拼装路径、配置和常用覆盖项 |
 | `RL/examples/config.yaml` | VeRL 训练默认配置 |
-| `RL/data/preprocess_data.sh` | 下载图像并生成 RL parquet |
-| `RL/data/preprocess.py` | 将原始 ChartQA 图像与标注转换为训练 parquet |
+| `data/rl/preprocess_data.sh` | 下载图像并生成 RL parquet |
+| `data/rl/preprocess.py` | 将原始 ChartQA 图像与标注转换为训练 parquet |
+| `data/chartqa/rl.py` | RL 预处理的共享 ChartQA 数据层逻辑 |
+| `data/chartqa/common.py` | LoRA 与 RL 共用的答案归一化与匹配逻辑 |
 | `RL/examples/format_prompt/chartQA_action.jinja` | structured action 的 prompt 模板 |
 | `RL/examples/reward_function/structured_chartqa.py` | 差分收益 reward 与 LLM Judge 混合奖励 |
 | `RL/verl/tooluse/structured_chartqa.py` | 动作解析、合法性校验、工具执行与回答 prompt 构建 |
@@ -69,14 +71,14 @@ RL 部分常用路径键如下：
 RL 训练使用的是预处理后的 parquet，而不是直接读取原始图片目录。执行：
 
 ```bash
-bash RL/data/preprocess_data.sh
+bash data/rl/preprocess_data.sh
 ```
 
 这个脚本会完成三件事：
 
 1. 下载 `ChartQA.zip`
-2. 解压 `RL/data/train_chartqa_vcot.zip`
-3. 运行 `RL/data/preprocess.py`，生成训练与验证 parquet
+2. 解压 `data/rl/train_chartqa_vcot.zip`
+3. 运行 `data/rl/preprocess.py`，生成训练与验证 parquet
 
 默认输出：
 
@@ -100,7 +102,7 @@ bash RL/data/preprocess_data.sh
 如果原始数据放在自定义位置，可以临时覆盖：
 
 ```bash
-CHARTQA_RAW_DIR=/abs/path/to/raw_data bash RL/data/preprocess_data.sh
+CHARTQA_RAW_DIR=/abs/path/to/raw_data bash data/rl/preprocess_data.sh
 ```
 
 ## 训练流程
@@ -243,7 +245,7 @@ Judge 运行规则：
 
 ## Replay Buffer 复用
 
-高质量 rollout 会进入 trainer 侧 replay buffer，用于在 PPO 更新之后追加 supervised replay update。默认实现位于 [`RL/verl/trainer/replay_buffer.py`](./verl/trainer/replay_buffer.py)。
+高质量 rollout 会进入 trainer 侧 replay buffer，用于在策略更新之后追加 supervised replay update。默认实现位于 [`RL/verl/trainer/replay_buffer.py`](./verl/trainer/replay_buffer.py)。
 
 默认准入逻辑：
 
@@ -274,7 +276,7 @@ Judge 运行规则：
 
 训练时的更新顺序是：
 
-1. PPO actor update
+1. GRPO / policy update（运行在 VeRL 的 PPO-family trainer skeleton 上）
 2. 从 replay buffer 采样动作监督样本
 3. 从 replay buffer 采样答案监督样本
 4. 执行一次 teacher-forcing supervised replay update

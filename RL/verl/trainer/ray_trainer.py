@@ -48,9 +48,6 @@ from . import core_algos
 from .config import PPOConfig
 from .metrics import compute_data_metrics, compute_throughout_metrics, compute_timing_metrics, reduce_metrics
 
-from ..tooluse.parse import Parser
-from ..tooluse.execution import CodeExecutor
-from ..tooluse.tools import *
 from ..tooluse.structured_chartqa import (
     build_baseline_answer_prompt,
     build_generation_feature,
@@ -63,10 +60,6 @@ from ..tooluse.structured_chartqa import (
 from PIL import Image
 from ..utils.dataset import collate_fn
 from .replay_buffer import ReplayBuffer
-
-from ..utils import torch_functional as VF
-
-from tensordict import TensorDict
 
 import sys
 import traceback
@@ -229,8 +222,6 @@ class RayPPOTrainer:
         self.reward_fn = reward_fn
         self.val_reward_fn = val_reward_fn
 
-        self.tool_parser = Parser()
-
         sys.unraisablehook = custom_unraisablehook
 
         self._project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -289,6 +280,11 @@ class RayPPOTrainer:
 
         if config.algorithm.adv_estimator not in list(AdvantageEstimator):
             raise NotImplementedError(f"Unknown advantage estimator: {config.algorithm.adv_estimator}.")
+        if config.algorithm.action_mode != "structured":
+            raise NotImplementedError(
+                "This ChartQA fork only supports structured action mode. "
+                "Legacy free-form tool-use paths have been removed."
+            )
 
         if config.data.rollout_batch_size % config.worker.actor.global_batch_size != 0:
             raise ValueError("Rollout batch size must be divisible by actor global batch size.")
@@ -466,13 +462,6 @@ class RayPPOTrainer:
                         record["saved_edited_image"] = str(tool_edited_image_path[i])
 
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
-
-    def display(self, obj):
-        self.captured_output = obj
-
-    def quick_save(self, file_name, text):
-        with open(file_name, 'w') as file:
-            file.write(text)
 
     def _ensure_image_cache(self, batch: DataProto) -> None:
         if "image_1_pil" in batch.non_tensor_batch:
@@ -958,736 +947,87 @@ class RayPPOTrainer:
         aux_metrics = reduce_metrics(actor_output.non_tensor_batch)
         metrics.update(aux_metrics)
 
-    def get_tool_context(self):
-        context = {
-            "display": self.display,
-            "focus_on_columns_with_mask": focus_on_columns_with_mask,
-            "focus_on_rows_with_mask": focus_on_rows_with_mask,
-            "focus_on_columns_with_draw": focus_on_columns_with_draw,
-            "focus_on_rows_with_draw": focus_on_rows_with_draw,
-            "focus_on_columns_with_highlight": focus_on_columns_with_highlight,
-            "focus_on_rows_with_highlight": focus_on_rows_with_highlight,
-            "focus_on_x_values_with_mask": focus_on_x_values_with_mask,
-            "focus_on_y_values_with_mask": focus_on_y_values_with_mask,
-            "focus_on_x_values_with_draw": focus_on_x_values_with_draw,
-            "focus_on_y_values_with_draw": focus_on_y_values_with_draw,
-            "focus_on_x_values_with_highlight": focus_on_x_values_with_highlight,
-            "focus_on_y_values_with_highlight": focus_on_y_values_with_highlight,
-        }
-        return context
-    
-    def is_image_closed(self, img):
-        try:
-            img.convert("RGB")
-            return False
-        except Exception as e:
-            if "closed image" in str(e):
-                print("Image is closed.")
-            return True
-
     def lcm(self, a, b):
         return abs(a * b) // math.gcd(a, b)
-    
-    def get_second_rollout_batch(self, og_output_gen_batch, original_full_batch, append=False, save_images=False):
-        #print(test_batch.non_tensor_batch.keys())
-
-        figure_paths = original_full_batch.non_tensor_batch["figure_path"]
-        prompts = original_full_batch.non_tensor_batch["prompt"]
-        figure_ids = original_full_batch.non_tensor_batch["figure_id"]
-        metadata_batch = original_full_batch.non_tensor_batch["metadata"]
-
-        # Store generated outputs
-        output_ids = og_output_gen_batch.batch["responses"]
-        output_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in output_ids]
-
-        #only implemented for h_chart
-
-        parsed_results = [self.tool_parser.parse(output_text) for output_text in output_texts]
-
-        trace_enable = self._trace_enable and bool(self._trace_dir) and (self._trace_max_steps <= 0 or self.global_step <= self._trace_max_steps)
-        trace_step_dir = None
-        if trace_enable:
-            trace_step_dir = os.path.join(self._trace_dir, f"step_{self.global_step:06d}")
-            os.makedirs(trace_step_dir, exist_ok=True)
-
-            n = len(parsed_results)
-            def ensure_key(key: str, default):
-                if key not in original_full_batch.non_tensor_batch:
-                    original_full_batch.non_tensor_batch[key] = np.array([default] * n, dtype=object)
-
-            ensure_key("tool_parse_status", 0)
-            ensure_key("tool_error_code", "")
-            ensure_key("tool_code", "")
-            ensure_key("tool_exec_success", 0)
-            ensure_key("tool_second_prompt", "")
-            ensure_key("tool_edited_image_path", "")
-            ensure_key("tool_original_image_path", "")
-            if "image_1_pil" not in original_full_batch.non_tensor_batch:
-                original_full_batch.non_tensor_batch["image_1_pil"] = np.array([None] * n, dtype=object)
-
-        # If parsed result returns a failure then we have some intermediate nonreward??
-
-        edited_images = []
-
-        tool_use_indices = []
-
-        second_rollout_datas = []
-
-        num_tool_calls = 0
-        num_direct = 0
-        num_success_tool_calls = 0
-        num_failed_tool_calls = 0
-
-        tool_functions = [
-            "focus_on_columns_with_mask",
-            "focus_on_rows_with_mask",
-            "focus_on_columns_with_draw",
-            "focus_on_rows_with_draw",
-            "focus_on_columns_with_highlight",
-            "focus_on_rows_with_highlight",
-            "focus_on_x_values_with_mask",
-            "focus_on_y_values_with_mask",
-            "focus_on_x_values_with_draw",
-            "focus_on_y_values_with_draw",
-            "focus_on_x_values_with_highlight",
-            "focus_on_y_values_with_highlight"
-        ]
-
-        # this actually takes some time
-        for idx, result in enumerate(parsed_results):
-            if not result["status"]:
-                if result["error_code"] == "NOTOOL":
-                    num_direct += 1
-                    if trace_enable:
-                        original_full_batch.non_tensor_batch["tool_parse_status"][idx] = 0
-                        original_full_batch.non_tensor_batch["tool_error_code"][idx] = "NOTOOL"
-                else:
-                    original_full_batch.non_tensor_batch["penalty"][idx] = -10
-                    num_tool_calls += 1
-                    num_failed_tool_calls += 1
-                    if trace_enable:
-                        original_full_batch.non_tensor_batch["tool_parse_status"][idx] = 0
-                        original_full_batch.non_tensor_batch["tool_error_code"][idx] = str(result.get("error_code", ""))
-
-                continue
-
-            metadata = json.loads(metadata_batch[idx])
-            
-            '''y_values = metadata["y_values"]
-            y_bboxes = metadata["y_bboxes"]
-
-            headers = y_values  # these are your column names
-            bbox_mapping = {label: bbox for label, bbox in zip(y_values, y_bboxes)}'''
-
-            if metadata["type"] == "v_bar":
-                bbox_mapping = metadata["x_values_bbox"]
-            elif metadata["type"] == "h_bar":
-                bbox_mapping = metadata["y_values_bbox"]
-
-            #code_executor = CodeExecutor("executor")
-            code = result["content"]
-            #exit_code, output, file_paths = code_executor.execute(result["content"])
-            figure_path = figure_paths[idx]
-
-            mentions_any_tool = any((f"{name}(" in code or f"{name} (" in code) for name in tool_functions)
-            if not mentions_any_tool:
-                num_direct += 1
-                original_full_batch.non_tensor_batch["penalty"][idx] = 0
-                if trace_enable:
-                    original_full_batch.non_tensor_batch["tool_parse_status"][idx] = 1
-                    original_full_batch.non_tensor_batch["tool_error_code"][idx] = "NO_TOOL_CALL"
-                    original_full_batch.non_tensor_batch["tool_code"][idx] = code
-                continue
-
-            num_tool_calls += 1
-
-            #print(code)
-            successful = True
-            exec_error = None
-
-            self.captured_output = None
-
-            context = self.get_tool_context()
-            if trace_enable:
-                original_full_batch.non_tensor_batch["tool_parse_status"][idx] = 1
-                original_full_batch.non_tensor_batch["tool_error_code"][idx] = ""
-                original_full_batch.non_tensor_batch["tool_code"][idx] = code
-
-            base_tools = dict(context)
-            allowed_tool_set = set(tool_functions)
-            tool_state = {"called_any": False, "called_allowed": False}
-
-            if metadata["type"] == "table":
-                context["columns_bbox"] = metadata["columns_bbox"]
-                context["rows_bbox"] = metadata["row_starters"]
-            else:
-                if metadata["type"] == "v_bar":
-                    context["columns_bbox"] = bbox_mapping
-                    context["rows_bbox"] = {}
-                elif metadata["type"] == "h_bar":
-                    context["columns_bbox"] = {}
-                    context["rows_bbox"] = bbox_mapping
-                else:
-                    context["columns_bbox"] = bbox_mapping
-                    context["rows_bbox"] = bbox_mapping
-
-            original_image = None
-            base_image = None
-            image_1_pil = original_full_batch.non_tensor_batch.get("image_1_pil", None)
-            if image_1_pil is not None and idx < len(image_1_pil) and isinstance(image_1_pil[idx], Image.Image):
-                base_image = image_1_pil[idx]
-            multi_modal_data = original_full_batch.non_tensor_batch.get("multi_modal_data", None)
-            if multi_modal_data is not None and idx < len(multi_modal_data):
-                mm = multi_modal_data[idx]
-                if isinstance(mm, dict):
-                    imgs = mm.get("image", None)
-                    if isinstance(imgs, list) and len(imgs) > 0 and isinstance(imgs[0], Image.Image):
-                        base_image = imgs[0]
-
-            if base_image is None:
-                try:
-                    fp = str(figure_path)
-                    candidates = []
-                    if os.path.isabs(fp):
-                        candidates.append(fp)
-                    else:
-                        candidates.append(fp)
-                        candidates.append(os.path.join(os.getcwd(), fp))
-                        candidates.append(os.path.join(self._project_root, fp))
-
-                    found = None
-                    for c in candidates:
-                        if os.path.exists(c):
-                            found = c
-                            break
-                    if found is None:
-                        raise FileNotFoundError(fp)
-                    base_image = Image.open(found)
-                except Exception:
-                    successful = False
-                    exec_error = "MISSING_IMAGE"
-
-            if base_image is not None:
-                original_image = base_image.copy()
-                if trace_enable:
-                    original_full_batch.non_tensor_batch["image_1_pil"][idx] = base_image
-                    if self._trace_save_images and trace_step_dir is not None:
-                        try:
-                            orig_dst = os.path.join(trace_step_dir, f"img_{idx}_orig.png")
-                            original_image.save(orig_dst)
-                            original_full_batch.non_tensor_batch["tool_original_image_path"][idx] = orig_dst
-                        except Exception:
-                            pass
-
-            if successful:
-                context["image_1"] = original_image.copy()
-                context["image"] = context["image_1"]
-                context["x_values_bbox"] = context["columns_bbox"]
-                context["y_values_bbox"] = context["rows_bbox"]
-                context["all_x_values_bounding_boxes"] = context["x_values_bbox"]
-                context["all_y_values_bounding_boxes"] = context["y_values_bbox"]
-                context["figure_path"] = figure_path
-                context["image_1_path"] = figure_path
-
-                def make_wrapper(name, fn):
-                    def _inner(*args, **kwargs):
-                        tool_state["called_any"] = True
-                        if name in allowed_tool_set:
-                            tool_state["called_allowed"] = True
-                        out = fn(*args, **kwargs)
-                        if isinstance(out, Image.Image):
-                            self.display(out)
-                        return out
-
-                    return _inner
-
-                for tool_name, tool_fn in list(base_tools.items()):
-                    if tool_name == "display":
-                        continue
-                    context[tool_name] = make_wrapper(tool_name, tool_fn)
-
-            try:
-                if successful:
-                    exec(code, context)
-            except BaseException as e:
-                successful = False
-                exec_error = e
-
-            if successful and not tool_state["called_any"]:
-                all_tool_names = [k for k in base_tools.keys() if k != "display"]
-                mentions_any_tool_fallback = any((f"{name}(" in code or f"{name} (" in code) for name in all_tool_names)
-                if mentions_any_tool_fallback:
-                    successful = False
-                    exec_error = "NO_TOOL_CALL"
-                else:
-                    num_direct += 1
-                    original_full_batch.non_tensor_batch["penalty"][idx] = 0
-                    continue
-
-            if successful:
-                if self.captured_output is not None:
-                    successful = isinstance(self.captured_output, Image.Image) and not self.is_image_closed(self.captured_output)
-                else:
-                    auto_img = None
-                    for k, v in context.items():
-                        if k in {"image_1", "image"}:
-                            continue
-                        if isinstance(v, Image.Image) and not self.is_image_closed(v):
-                            auto_img = v
-                            break
-                    if auto_img is not None:
-                        self.captured_output = auto_img
-                        successful = True
-                    else:
-                        successful = False
-
-            if successful:
-                num_success_tool_calls += 1
-                if trace_enable:
-                    original_full_batch.non_tensor_batch["tool_exec_success"][idx] = 1
-
-                edited_images.append(self.captured_output)
-
-                trim_to_action_end = self.tool_parser.trim_to_action_end(output_texts[idx])
-
-                #we need to add image repsonse here:
-                trim_to_action_end += "\nOBSERVATION: Execution success. The output is as follows:"
-                trim_to_action_end += "\n<the image outputs of the code is added as the second image>"
-
-                #image isn't actually used here so we insert two dummy images
-                messages = self.val_dataloader.dataset.tu_build_message(prompts[idx], [None, None], trim_to_action_end)
-                
-                prompt = self.processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
-                if trace_enable:
-                    original_full_batch.non_tensor_batch["tool_second_prompt"][idx] = prompt
-
-                edited_image = self.captured_output
-                if trace_enable and self._trace_save_images and trace_step_dir is not None:
-                    try:
-                        edited_dst = os.path.join(trace_step_dir, f"img_{idx}_edited.png")
-                        edited_image.save(edited_dst)
-                        original_full_batch.non_tensor_batch["tool_edited_image_path"][idx] = edited_dst
-                    except Exception:
-                        pass
-
-                images = [self.val_dataloader.dataset.process_image(image) for image in [original_image, edited_image]]
-
-                model_inputs = self.processor(images, [prompt], add_special_tokens=False, return_tensors="pt")
-                input_ids = model_inputs.pop("input_ids")[0]
-                attention_mask = model_inputs.pop("attention_mask")[0]
-
-                #we assume this is not for QWEN2, see dataset.py for code
-                position_ids = torch.clip(attention_mask.cumsum(dim=0) - 1, min=0, max=None)  # (seq_length,)
-                
-                second_rollout_data = {}
-
-                second_rollout_data["multi_modal_data"] = {"image": images}
-                second_rollout_data["multi_modal_inputs"] = dict(model_inputs)
-
-                input_ids, attention_mask, position_ids = VF.postprocess_data(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                    max_length=self.val_dataloader.dataset.max_prompt_length,
-                    pad_token_id=self.tokenizer.pad_token_id,
-                    left_pad=True,
-                    truncation=self.val_dataloader.dataset.truncation,
-                )
-
-                max_prompt_length = self.val_dataloader.dataset.max_prompt_length
-
-                raw_prompt_ids = self.tokenizer.encode(prompt, add_special_tokens=False)
-                if len(raw_prompt_ids) > max_prompt_length:
-                    if self.truncation == "left":
-                        raw_prompt_ids = raw_prompt_ids[-max_prompt_length :]
-                    elif self.truncation == "right":
-                        raw_prompt_ids = raw_prompt_ids[: max_prompt_length]
-                    elif self.truncation == "error":
-                        raise RuntimeError(f"Prompt length {len(raw_prompt_ids)} is longer than {max_prompt_length}.")
-                    
-                second_rollout_data["input_ids"] = input_ids
-                second_rollout_data["attention_mask"] = attention_mask
-                second_rollout_data["position_ids"] = position_ids
-                second_rollout_data["raw_prompt_ids"] = raw_prompt_ids
-                second_rollout_data["metadata"] = metadata_batch[idx]
-                second_rollout_data["rollout_round"] = 1
-
-                # we add all the keys that aren't yet assigned
-                for key in original_full_batch.non_tensor_batch.keys():
-                    if key not in second_rollout_data:
-                        second_rollout_data[key] = original_full_batch.non_tensor_batch[key][idx]
-
-                second_rollout_datas.append(second_rollout_data)
-
-                tool_use_indices.append(idx)
-
-                #original_full_batch.non_tensor_batch["penalty"][idx] += 1
-
-                use_proper_function = any(func in code for func in tool_functions)
-                if use_proper_function:
-                    original_full_batch.non_tensor_batch["penalty"][idx] = 1
-                else:
-                    original_full_batch.non_tensor_batch["penalty"][idx] = -1
-
-            else:
-                original_full_batch.non_tensor_batch["penalty"][idx] = -10
-                #original_full_batch.non_tensor_batch["penalty"][idx] -= 0.05
-                num_failed_tool_calls += 1
-                edited_images.append(None)
-                if trace_enable:
-                    original_full_batch.non_tensor_batch["tool_exec_success"][idx] = 0
-                    if exec_error is not None:
-                        original_full_batch.non_tensor_batch["tool_error_code"][idx] = (
-                            type(exec_error).__name__ if isinstance(exec_error, BaseException) else str(exec_error)
-                        )
-                    else:
-                        original_full_batch.non_tensor_batch["tool_error_code"][idx] = "NO_OUTPUT"
-                    if self._trace_save_images and trace_step_dir is not None and isinstance(original_image, Image.Image):
-                        try:
-                            orig_dst = os.path.join(trace_step_dir, f"img_{idx}_orig.png")
-                            original_image.save(orig_dst)
-                            original_full_batch.non_tensor_batch["tool_original_image_path"][idx] = orig_dst
-                        except Exception:
-                            pass
-
-            #print(f"SUCCESSFUL {successful}")
-            #print("------")
-
-        #if the model makes 0 calls to rollout
-        if len(second_rollout_datas) == 0:
-            stats = {
-                "num_tool_calls" : num_tool_calls,
-                "num_direct" : num_direct,
-                "num_success_tool_calls" : num_success_tool_calls,
-                "num_failed_tool_calls" : num_failed_tool_calls
-            }
-            return original_full_batch, stats
-        
-
-        if append:
-            # Repeat last for n times
-            world_size = self.actor_rollout_wg.world_size
-            micro_batch_size = self.config.worker.actor.micro_batch_size_per_device_for_experience
-            global_batch_size = self.config.worker.actor.global_batch_size
-            rollout_n = self.config.worker.rollout.n
-
-            # Calculate the LCM of all three
-            lcm1 = self.lcm(world_size, micro_batch_size)
-            lcm2 = self.lcm(lcm1, global_batch_size)
-            full_lcm = self.lcm(lcm2, rollout_n)
-
-            current_len = len(second_rollout_datas) + len(figure_paths)
-            append_padding_size = (full_lcm - current_len % full_lcm) % full_lcm
-
-            second_rollout_datas.extend([second_rollout_datas[-1]] * append_padding_size)
-
-        second_rollout_batch_dict = collate_fn(second_rollout_datas)
-
-        ##SECOND ROLLOUT
-
-        second_rollout_batch = DataProto.from_single_dict(second_rollout_batch_dict)
-
-        #print(test_batch.batch["figure_id"])
-        # Store original inputs
-        input_ids = second_rollout_batch.batch["input_ids"]
-
-        #print("starting second rollout")
-
-        if "multi_modal_data" in second_rollout_batch.non_tensor_batch.keys():
-            second_test_gen_batch = second_rollout_batch.pop(
-                batch_keys=["input_ids", "attention_mask", "position_ids"],
-                non_tensor_batch_keys=["raw_prompt_ids", "multi_modal_data"],
-            )
-        else:
-            second_test_gen_batch = second_rollout_batch.pop(
-                batch_keys=["input_ids", "attention_mask", "position_ids"],
-                non_tensor_batch_keys=["raw_prompt_ids"],
-            )
-
-        second_test_gen_batch.meta_info = self.config.worker.rollout.val_override_config
-        second_test_gen_batch, pad_size = pad_dataproto_to_divisor(second_test_gen_batch, self.actor_rollout_wg.world_size)
-
-        #second output gen batch corresponds to test_output_gen_batch
-        second_output_gen_batch = self.actor_rollout_wg.generate_sequences(second_test_gen_batch)
-        second_output_gen_batch = unpad_dataproto(second_output_gen_batch, pad_size=pad_size)
-
-        #this corrsponds to the test_batch in original
-        second_rollout_batch = second_rollout_batch.union(second_output_gen_batch)
-
-        # Store generated outputs
-        second_output_ids = second_output_gen_batch.batch["responses"]
-        #second_output_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in second_output_ids]
-
-        '''second_output_eval = ""
-        for indice, og_id in enumerate(tool_use_indices):'''
-            
-        #print(second_output_texts)
-        #self.quick_save("second_rollout.txt", "\n\n--------\n\n".join(second_output_texts))
-
-        #for combining the two datasets
-        #we should probably
-        #keep the original prompt
-        #concatenate instead of replacing: attention mask, input ids
-        #since to the model they are the same things.
-        #MASKING should also be implemented here
-
-        if not append:
-            #if we do not append this for double reward purposes, we replace it
-            keys_to_remain = {"prompts", "input_ids", "position_ids", "attention_mask"}
-            keys_to_merge = {"responses", "response_mask"}
-
-            keys_to_remain = {""}
-            keys_to_merge = {""}
-
-            for key in original_full_batch.batch.keys():
-                if key not in second_rollout_batch.batch:
-                    continue
-
-                if key in keys_to_remain:
-                    continue
-
-                if key in keys_to_merge:
-                    for index, og_index in enumerate(tool_use_indices):
-                        original_full_batch.batch[key][og_index] = torch.cat(
-                            (original_full_batch.batch[key][og_index], second_rollout_batch.batch[key][index])
-                        )
-                    continue
-
-                for index, og_index in enumerate(tool_use_indices):
-                    original_full_batch.batch[key][og_index] = second_rollout_batch.batch[key][index]
-
-            for key in original_full_batch.non_tensor_batch.keys():
-                if key not in second_rollout_batch.non_tensor_batch:
-                    continue
-
-                for index, og_index in enumerate(tool_use_indices):
-                    original_full_batch.non_tensor_batch[key][og_index] = second_rollout_batch.non_tensor_batch[key][index]
-        else:
-            first_key, first_value = next(iter(second_rollout_batch.batch.items()))
-
-            #append_padding_size = (self.actor_rollout_wg.world_size - len(second_rollout_batch.batch[first_key]) % self.actor_rollout_wg.world_size) % self.actor_rollout_wg.world_size
-
-            final_batch_size = current_len + append_padding_size
-            
-            merged_data = {}
-            for key in second_rollout_batch.batch.keys():
-                if key not in original_full_batch.batch:
-                    continue
-
-                first = original_full_batch.batch[key]
-                second = second_rollout_batch.batch[key]
-
-                #apply masking
-                '''if key == "attention_mask":
-                    if append_padding_size > 0:
-                        second[-append_padding_size:] *= 0'''
-                    #padding *= 0'''
-
-                merged_data[key] = torch.cat((first, second), dim=0)
-
-            new_batch = TensorDict(merged_data, batch_size=[final_batch_size])
-
-            new_non_tensor = {}
-            for key in second_rollout_batch.non_tensor_batch.keys():
-                if key not in original_full_batch.non_tensor_batch:
-                    continue
-
-                v1 = original_full_batch.non_tensor_batch[key]
-                v2 = second_rollout_batch.non_tensor_batch[key]
-
-                if isinstance(v1, list) and isinstance(v2, list):
-                    new_non_tensor[key] = v1 + v2
-                elif isinstance(v1, np.ndarray) and isinstance(v2, np.ndarray):
-                    new_non_tensor[key] = np.concatenate([v1, v2], axis=0)
-                else:
-                    raise Exception("invalid types")
-
-            original_full_batch = DataProto(batch=new_batch, non_tensor_batch=new_non_tensor)
-
-
-        stats = {
-            "num_tool_calls" : num_tool_calls,
-            "num_direct" : num_direct,
-            "num_success_tool_calls" : num_success_tool_calls,
-            "num_failed_tool_calls" : num_failed_tool_calls
-        }
-
-        return original_full_batch, stats
 
     def _validate(self) -> Dict[str, Any]:
         reward_tensor_lst = []
-        # Lists to collect samples for the table
         sample_inputs, sample_outputs, sample_labels, sample_scores = [], [], [], []
         reward_metrics_lst = defaultdict(list)
-
-        if self.config.algorithm.action_mode == "structured":
-            stats_total = {
-                "tool_requested": 0.0,
-                "action_legal": 0.0,
-                "tool_legal": 0.0,
-                "tool_exec_success": 0.0,
-                "invalid_action": 0.0,
-                "num_examples": 0.0,
-            }
-            success_mask_all: List[bool] = []
-
-            for batch_dict in self.val_dataloader:
-                test_batch = DataProto.from_single_dict(batch_dict)
-                self._ensure_image_cache(test_batch)
-
-                sample_inputs.extend(test_batch.non_tensor_batch["query"].tolist())
-                sample_labels.extend(test_batch.non_tensor_batch["ground_truth"].tolist())
-
-                test_gen_batch = test_batch.pop(
-                    batch_keys=["input_ids", "attention_mask", "position_ids"],
-                    non_tensor_batch_keys=["raw_prompt_ids", "multi_modal_data"],
-                )
-                test_gen_batch.meta_info = self.config.worker.rollout.val_override_config
-                test_gen_batch, pad_size = pad_dataproto_to_divisor(test_gen_batch, self.actor_rollout_wg.world_size)
-                test_output_gen_batch = self.actor_rollout_wg.generate_sequences(test_gen_batch)
-                test_output_gen_batch = unpad_dataproto(test_output_gen_batch, pad_size=pad_size)
-                test_batch = test_batch.union(test_output_gen_batch)
-                test_batch, batch_stats = self._process_structured_chartqa_batch(test_batch)
-
-                reward_tensor, reward_metrics = ray.get(self.val_reward_fn.compute_reward.remote(test_batch))
-                reward_tensor_lst.append(reward_tensor)
-                for key, value in reward_metrics.items():
-                    reward_metrics_lst[key].extend(value)
-
-                sample_outputs.extend(test_batch.non_tensor_batch["final_answer_text"].tolist())
-                scores = reward_tensor.sum(-1).cpu().tolist()
-                sample_scores.extend(scores)
-
-                stats_total["tool_requested"] += float(np.sum(test_batch.non_tensor_batch["tool_requested"].astype(bool)))
-                stats_total["action_legal"] += float(np.sum(test_batch.non_tensor_batch["action_valid"].astype(bool)))
-                stats_total["tool_legal"] += float(np.sum(test_batch.non_tensor_batch["action_valid"].astype(bool) & test_batch.non_tensor_batch["tool_requested"].astype(bool)))
-                stats_total["tool_exec_success"] += float(np.sum(test_batch.non_tensor_batch["tool_exec_success"].astype(bool)))
-                stats_total["invalid_action"] += float(np.sum(test_batch.non_tensor_batch["invalid_action"].astype(bool)))
-                stats_total["num_examples"] += float(len(test_batch))
-                success_mask_all.extend(test_batch.non_tensor_batch["tool_exec_success"].astype(bool).tolist())
-
-            self._maybe_log_val_generations(sample_inputs, sample_outputs, sample_labels, sample_scores)
-            reward_score = torch.cat(reward_tensor_lst, dim=0).sum(-1).mean().item() if reward_tensor_lst else 0.0
-            val_reward_metrics = {f"val/{key}_reward": value for key, value in reduce_metrics(reward_metrics_lst).items()}
-            legal_denom = max(stats_total["tool_legal"], 1.0)
-            success_denom = max(stats_total["tool_exec_success"], 1.0)
-            total = max(stats_total["num_examples"], 1.0)
-            tool_gain_values = reward_metrics_lst.get("tool_gain", [])
-            avg_tool_gain = (
-                sum(value for value, success in zip(tool_gain_values, success_mask_all) if success) / success_denom
-                if tool_gain_values
-                else 0.0
-            )
-            structured_metrics = {
-                "val/reward_score": reward_score,
-                "val/QAAccuracy": float(np.mean(reward_metrics_lst.get("answer_accuracy", [0.0]))),
-                "val/ToolCallRate": stats_total["tool_requested"] / total,
-                "val/LegalActionRate": stats_total["action_legal"] / total,
-                "val/ToolExecSuccessRate": stats_total["tool_exec_success"] / legal_denom,
-                "val/ToolEffectivenessRate": (
-                    sum(value for value, success in zip(reward_metrics_lst.get("effective_tool", []), success_mask_all) if success)
-                    / success_denom
-                ),
-                "val/AvgToolGain": avg_tool_gain,
-                "val/InvalidActionRate": stats_total["invalid_action"] / total,
-                "val/JudgeScore": float(np.mean(reward_metrics_lst.get("judge_score", [0.0]))),
-                "val/RewardScore": float(np.mean(reward_metrics_lst.get("overall", [0.0]))),
-            }
-            return {**structured_metrics, **val_reward_metrics}
-
-        tool_stats = {
-            "num_tool_calls" : 0,
-            "num_direct" : 0,
-            "num_success_tool_calls" : 0,
-            "num_failed_tool_calls" : 0
+        stats_total = {
+            "tool_requested": 0.0,
+            "action_legal": 0.0,
+            "tool_legal": 0.0,
+            "tool_exec_success": 0.0,
+            "invalid_action": 0.0,
+            "num_examples": 0.0,
         }
+        success_mask_all: List[bool] = []
 
         for batch_dict in self.val_dataloader:
             test_batch = DataProto.from_single_dict(batch_dict)
+            self._ensure_image_cache(test_batch)
 
-            #print(test_batch.batch["figure_id"])
-            # Store original inputs
-            input_ids = test_batch.batch["input_ids"]
-            input_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in input_ids]
-            sample_inputs.extend(input_texts)
+            sample_inputs.extend(test_batch.non_tensor_batch["query"].tolist())
+            sample_labels.extend(test_batch.non_tensor_batch["ground_truth"].tolist())
 
-            if "multi_modal_data" in test_batch.non_tensor_batch.keys():
-                mm = test_batch.non_tensor_batch.get("multi_modal_data", None)
-                if mm is not None:
-                    image_1_pil = []
-                    for item in mm:
-                        img0 = None
-                        if isinstance(item, dict):
-                            imgs = item.get("image", None)
-                            if isinstance(imgs, list) and len(imgs) > 0 and isinstance(imgs[0], Image.Image):
-                                img0 = imgs[0]
-                        image_1_pil.append(img0)
-                    test_batch.non_tensor_batch["image_1_pil"] = np.array(image_1_pil, dtype=object)
-                test_gen_batch = test_batch.pop(
-                    batch_keys=["input_ids", "attention_mask", "position_ids"],
-                    non_tensor_batch_keys=["raw_prompt_ids", "multi_modal_data"],
-                )
-            else:
-                test_gen_batch = test_batch.pop(
-                    batch_keys=["input_ids", "attention_mask", "position_ids"],
-                    non_tensor_batch_keys=["raw_prompt_ids"],
-                )
-
+            test_gen_batch = test_batch.pop(
+                batch_keys=["input_ids", "attention_mask", "position_ids"],
+                non_tensor_batch_keys=["raw_prompt_ids", "multi_modal_data"],
+            )
             test_gen_batch.meta_info = self.config.worker.rollout.val_override_config
             test_gen_batch, pad_size = pad_dataproto_to_divisor(test_gen_batch, self.actor_rollout_wg.world_size)
-
-            #this is generated output / search r1
             test_output_gen_batch = self.actor_rollout_wg.generate_sequences(test_gen_batch)
             test_output_gen_batch = unpad_dataproto(test_output_gen_batch, pad_size=pad_size)
-            
-            #call second rollout here
-
-            ##END SECOND ROLLOUT
-
-            output_ids = test_output_gen_batch.batch["responses"]
-            output_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in output_ids]
-
-            sample_outputs.extend(output_texts)
-            sample_labels.extend(test_batch.non_tensor_batch["ground_truth"].tolist())
             test_batch = test_batch.union(test_output_gen_batch)
+            test_batch, _ = self._process_structured_chartqa_batch(test_batch)
 
-            test_batch, batch_tool_stats = self.get_second_rollout_batch(test_output_gen_batch, test_batch, save_images=True)
-            for key in batch_tool_stats:
-                tool_stats[key] += batch_tool_stats[key]
-
-            #We merge TEST_BATCH (1st rollout) and SECOND_ROLLOUT_BATCH here
-            #for index in tool_use_indices:
-            #NAIVE IMPLEMENTATION
-            #Hope this is correct: https://verl.readthedocs.io/en/latest/data.html
-
-            #validation_index = tool_use_indices[0]
-            #print(test_batch.non_tensor_batch["ground_truth"][validation_index])
-
-            #to validate??
-
-            #print(test_batch.non_tensor_batch["ground_truth"][validation_index])
-
-            #----END OF MERGING
-            #We have successfully replaced second rollouts w/ the first rollouts.
-
-            # evaluate using reward_function
             reward_tensor, reward_metrics = ray.get(self.val_reward_fn.compute_reward.remote(test_batch))
-
-            # Store scores
-            scores = reward_tensor.sum(-1).cpu().tolist()
-            sample_scores.extend(scores)
-
             reward_tensor_lst.append(reward_tensor)
             for key, value in reward_metrics.items():
                 reward_metrics_lst[key].extend(value)
 
-        tool_call_ratio = tool_stats["num_tool_calls"] / (tool_stats["num_direct"] + tool_stats["num_tool_calls"] + 0.001)
-        tool_call_success_rate = tool_stats["num_success_tool_calls"] / (tool_stats["num_tool_calls"] + 0.001)
+            sample_outputs.extend(test_batch.non_tensor_batch["final_answer_text"].tolist())
+            sample_scores.extend(reward_tensor.sum(-1).cpu().tolist())
+
+            stats_total["tool_requested"] += float(np.sum(test_batch.non_tensor_batch["tool_requested"].astype(bool)))
+            stats_total["action_legal"] += float(np.sum(test_batch.non_tensor_batch["action_valid"].astype(bool)))
+            stats_total["tool_legal"] += float(
+                np.sum(test_batch.non_tensor_batch["action_valid"].astype(bool) & test_batch.non_tensor_batch["tool_requested"].astype(bool))
+            )
+            stats_total["tool_exec_success"] += float(np.sum(test_batch.non_tensor_batch["tool_exec_success"].astype(bool)))
+            stats_total["invalid_action"] += float(np.sum(test_batch.non_tensor_batch["invalid_action"].astype(bool)))
+            stats_total["num_examples"] += float(len(test_batch))
+            success_mask_all.extend(test_batch.non_tensor_batch["tool_exec_success"].astype(bool).tolist())
 
         self._maybe_log_val_generations(sample_inputs, sample_outputs, sample_labels, sample_scores)
-        reward_score = torch.cat(reward_tensor_lst, dim=0).sum(-1).mean().item()
+        reward_score = torch.cat(reward_tensor_lst, dim=0).sum(-1).mean().item() if reward_tensor_lst else 0.0
         val_reward_metrics = {f"val/{key}_reward": value for key, value in reduce_metrics(reward_metrics_lst).items()}
-        return {"val/reward_score": reward_score, "val/tool_call_ratio" : tool_call_ratio, "val/tool_call_success_rate": tool_call_success_rate, **val_reward_metrics}
+        legal_denom = max(stats_total["tool_legal"], 1.0)
+        success_denom = max(stats_total["tool_exec_success"], 1.0)
+        total = max(stats_total["num_examples"], 1.0)
+        tool_gain_values = reward_metrics_lst.get("tool_gain", [])
+        avg_tool_gain = (
+            sum(value for value, success in zip(tool_gain_values, success_mask_all) if success) / success_denom
+            if tool_gain_values
+            else 0.0
+        )
+        structured_metrics = {
+            "val/reward_score": reward_score,
+            "val/QAAccuracy": float(np.mean(reward_metrics_lst.get("answer_accuracy", [0.0]))),
+            "val/ToolCallRate": stats_total["tool_requested"] / total,
+            "val/LegalActionRate": stats_total["action_legal"] / total,
+            "val/ToolExecSuccessRate": stats_total["tool_exec_success"] / legal_denom,
+            "val/ToolEffectivenessRate": (
+                sum(value for value, success in zip(reward_metrics_lst.get("effective_tool", []), success_mask_all) if success)
+                / success_denom
+            ),
+            "val/AvgToolGain": avg_tool_gain,
+            "val/InvalidActionRate": stats_total["invalid_action"] / total,
+            "val/JudgeScore": float(np.mean(reward_metrics_lst.get("judge_score", [0.0]))),
+            "val/RewardScore": float(np.mean(reward_metrics_lst.get("overall", [0.0]))),
+        }
+        return {**structured_metrics, **val_reward_metrics}
 
     def init_workers(self) -> None:
         """Init resource pool and worker group"""
@@ -1880,13 +1220,10 @@ class RayPPOTrainer:
 
             new_batch = new_batch.repeat(repeat_times=self.config.worker.rollout.n, interleave=True)
             new_batch = new_batch.union(gen_batch_output)
-            if self.config.algorithm.action_mode == "structured" and "metadata" in new_batch.non_tensor_batch:
-                new_batch, _ = self._process_structured_chartqa_batch(new_batch)
-            elif getattr(self.config.worker.reward, "double_reward", False) and "metadata" in new_batch.non_tensor_batch:
-                new_batch, _ = self.get_second_rollout_batch(
-                    gen_batch_output, new_batch, append=self.config.worker.reward.double_reward
-                )
-                new_batch.non_tensor_batch.pop("multi_modal_data", None)
+            if "metadata" not in new_batch.non_tensor_batch:
+                raise KeyError("Structured ChartQA training expects metadata in the RL batch.")
+            new_batch, _ = self._process_structured_chartqa_batch(new_batch)
+            new_batch.non_tensor_batch.pop("multi_modal_data", None)
 
             reward_tensor, reward_metrics = ray.get(self.reward_fn.compute_reward.remote(new_batch))
             new_batch.batch = new_batch.batch.clone()
@@ -1961,8 +1298,7 @@ class RayPPOTrainer:
                     with timer("reward", timing_raw):
                         reward_tensor, reward_metrics = ray.get(self.reward_fn.compute_reward.remote(batch))
 
-                    if self.config.algorithm.action_mode == "structured":
-                        self._maybe_update_replay_buffer(batch, reward_metrics)
+                    self._maybe_update_replay_buffer(batch, reward_metrics)
 
                     self._maybe_trace_step(batch, reward_tensor, reward_metrics)
                     batch.batch = batch.batch.clone()
@@ -2017,8 +1353,7 @@ class RayPPOTrainer:
 
                         actor_metrics = reduce_metrics(actor_output.non_tensor_batch)
                         metrics.update(actor_metrics)
-                        if self.config.algorithm.action_mode == "structured":
-                            self._maybe_run_replay_update(metrics)
+                        self._maybe_run_replay_update(metrics)
 
                     if (
                         self.val_reward_fn is not None
@@ -2097,12 +1432,9 @@ class RayPPOTrainer:
                         batch = batch.repeat(repeat_times=self.config.worker.rollout.n, interleave=True)
 
                         batch = batch.union(gen_batch_output)
-                        if self.config.algorithm.action_mode == "structured" and "metadata" in batch.non_tensor_batch:
-                            batch, _ = self._process_structured_chartqa_batch(batch)
-                        elif getattr(self.config.worker.reward, "double_reward", False) and "metadata" in batch.non_tensor_batch:
-                            batch, _ = self.get_second_rollout_batch(
-                                gen_batch_output, batch, append=self.config.worker.reward.double_reward
-                            )
+                        if "metadata" not in batch.non_tensor_batch:
+                            raise KeyError("Structured ChartQA training expects metadata in the RL batch.")
+                        batch, _ = self._process_structured_chartqa_batch(batch)
 
                         batch.non_tensor_batch.pop("multi_modal_data", None)
 
@@ -2110,8 +1442,7 @@ class RayPPOTrainer:
                             reward_ref = self.reward_fn.compute_reward.remote(batch)
 
                         reward_tensor, reward_metrics = ray.get(reward_ref)
-                        if self.config.algorithm.action_mode == "structured":
-                            self._maybe_update_replay_buffer(batch, reward_metrics)
+                        self._maybe_update_replay_buffer(batch, reward_metrics)
                         self._maybe_trace_step(batch, reward_tensor, reward_metrics)
                         try:
                             if "token_level_scores" in batch.batch.keys():
@@ -2201,8 +1532,7 @@ class RayPPOTrainer:
 
                         actor_metrics = reduce_metrics(actor_output.non_tensor_batch)
                         metrics.update(actor_metrics)
-                        if self.config.algorithm.action_mode == "structured":
-                            self._maybe_run_replay_update(metrics)
+                        self._maybe_run_replay_update(metrics)
 
                     # validate
                     if (

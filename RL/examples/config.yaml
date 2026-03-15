@@ -18,7 +18,7 @@ data:
   filter_overlong_prompts: false
 
 algorithm:
-  adv_estimator: grpo
+  adv_estimator: grpo  # current experiment algorithm; RayPPOTrainer is only the PPO-family trainer skeleton from VeRL
   action_mode: structured
   run_baseline_branch: true
   disable_kl: false

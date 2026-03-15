@@ -13,7 +13,7 @@
 | 阶段 | 数据 | 用途 |
 | --- | --- | --- |
 | SFT | `swift/ChartQA` | 监督微调与离线评测 |
-| RL | `ChartQA` 图像 + `RL/data/train_chartqa_vcot.zip` | 预处理生成 RL 训练 parquet |
+| RL | `ChartQA` 图像 + `data/rl/train_chartqa_vcot.zip` | 预处理生成 RL 训练 parquet |
 
 ## SFT
 
@@ -91,7 +91,7 @@ python LoRA/chartqa_eval.py --config LoRA/configs/chartqa_qwen3vl4b.json
 4. 预处理 RL 数据并启动训练
 
 ```bash
-bash RL/data/preprocess_data.sh
+bash data/rl/preprocess_data.sh
 cp RL/judge/judge_info.example.json RL/judge/judge_info.json
 bash RL/train.sh
 python RL/evaluate_structured.py --model_path /abs/path/to/model_or_actor

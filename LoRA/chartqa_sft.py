@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from functools import partial
 from pathlib import Path
 
@@ -10,6 +11,11 @@ from peft import LoraConfig, PeftModel, get_peft_model
 from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
 from trl import SFTConfig, SFTTrainer
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from data.chartqa.sft import collate_vlm_sft, load_chartqa_splits
 from utils.config import (
     DEFAULT_CONFIG_PATH,
     apply_path_defaults,
@@ -21,8 +27,6 @@ from utils.config import (
 from utils.utils import (
     build_run_metadata,
     build_split_summary,
-    collate_vlm_sft,
-    load_chartqa_splits,
     save_json,
 )
 

@@ -19,7 +19,6 @@ Thumbs.db
 
 # Project artifacts
 .cache/
-data/
 models/
 outputs/
 config/paths.json
@@ -34,6 +33,7 @@ RL/judge/judge_info.json
 *.ckpt
 *.parquet
 *.zip
+!data/rl/train_chartqa_vcot.zip
 
 # Logs
 swanlog/

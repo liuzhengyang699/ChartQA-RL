@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 import torch
@@ -8,6 +9,12 @@ from peft import PeftModel
 from tqdm import tqdm
 from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from data.chartqa.common import compare_chartqa_answers
+from data.chartqa.sft import build_chartqa_messages, load_chartqa_splits, render_generation_inputs
 from utils.config import (
     DEFAULT_CONFIG_PATH,
     apply_path_defaults,
@@ -18,10 +25,6 @@ from utils.config import (
     resolve_model_source,
 )
 from utils.utils import (
-    build_chartqa_messages,
-    compare_chartqa_answers,
-    load_chartqa_splits,
-    render_generation_inputs,
     save_json,
 )
 

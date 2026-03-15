@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -12,6 +13,12 @@ import aiohttp
 
 REWARD_DIR = Path(__file__).resolve().parent
 RL_ROOT = REWARD_DIR.parents[1]
+PROJECT_ROOT = REWARD_DIR.parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from data.chartqa.common import compute_chartqa_match_score
+
 JUDGE_DIR = RL_ROOT / "judge"
 JUDGE_PROMPT_PATH = JUDGE_DIR / "judge_prompt.txt"
 JUDGE_INFO_PATHS = [
@@ -32,43 +39,11 @@ def extract_final_answer(text: str) -> str:
     return content.splitlines()[-1].strip().strip(".")
 
 
-def is_number(value: str) -> bool:
-    try:
-        float(value)
-        return True
-    except (TypeError, ValueError):
-        return False
-
-
-def similarity_score(a: float, b: float) -> float:
-    if a == b:
-        return 1.0
-    if a == 0 or b == 0:
-        return 0.0
-    return max(0.0, 1 - (abs(a - b) / max(abs(a), abs(b))))
-
-
 def compute_rule_score(answer_text: str, ground_truth: str) -> float:
     answer = extract_final_answer(answer_text)
     if not answer:
         return 0.0
-
-    gt_parts = [part.strip() for part in str(ground_truth).split("|||") if part.strip()]
-    if not gt_parts:
-        return 0.0
-
-    total = max(len(gt_parts), 1)
-    matched = 0.0
-    for candidate in [part.strip() for part in answer.split("||") if part.strip()]:
-        candidate_scores = []
-        for gt in gt_parts:
-            if is_number(gt) and is_number(candidate):
-                candidate_scores.append(similarity_score(float(gt), float(candidate)))
-            elif candidate == gt:
-                candidate_scores.append(1.0)
-        if candidate_scores:
-            matched += max(candidate_scores)
-    return min(1.0, matched / total)
+    return compute_chartqa_match_score(answer, ground_truth)
 
 
 class JudgeCache:
