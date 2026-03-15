@@ -18,7 +18,7 @@ import sys
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from functools import partial
-from typing import Callable, Dict, List, Optional, Tuple, TypedDict
+from typing import Any, Callable, Dict, List, Optional, Tuple, TypedDict
 
 import torch
 from transformers import PreTrainedTokenizer
@@ -40,6 +40,8 @@ BatchRewardFunction = Callable[[List[str], List[str]], List[RewardScore]]
 LLMBatchRewardFunction = Callable[[List[str], List[str], List[str], List[str]], List[RewardScore]]
 
 LLMDoubleBatchRewardFunction = Callable[[List[str], List[str], List[str], List[str], List[str], List[str]], List[RewardScore]]
+
+StructuredChartQARewardFunction = Callable[..., List[RewardScore]]
 
 
 class FunctionRewardManager(ABC):
@@ -189,6 +191,54 @@ class LLMDoubleBatchFunctionRewardManager(FunctionRewardManager):
             for key, value in score.items():
                 if key == "ignore":
                     continue
+                reward_metrics[key].append(value)
+
+        return reward_tensor, reward_metrics
+
+
+class StructuredChartQARewardManager(FunctionRewardManager):
+    reward_fn: StructuredChartQARewardFunction
+
+    def compute_reward(self, data: DataProto) -> Tuple[torch.Tensor, Dict[str, List[float]]]:
+        response_ids = data.batch["responses"]
+        response_length = data.batch["response_mask"].sum(dim=-1)
+        records: List[Dict[str, Any]] = []
+
+        for i in range(len(data)):
+            valid_response_ids = response_ids[i][: response_length[i]]
+            response_text = self.tokenizer.decode(
+                valid_response_ids,
+                skip_special_tokens=self.config.skip_special_tokens,
+            )
+            records.append(
+                {
+                    "action_response_text": response_text,
+                    "query": data.non_tensor_batch["query"][i],
+                    "ground_truth": data.non_tensor_batch["ground_truth"][i],
+                    "final_answer_text": data.non_tensor_batch.get("final_answer_text", [None] * len(data))[i],
+                    "baseline_answer_text": data.non_tensor_batch.get("baseline_answer_text", [None] * len(data))[i],
+                    "tool_requested": data.non_tensor_batch.get("tool_requested", [False] * len(data))[i],
+                    "tool_executed": data.non_tensor_batch.get("tool_exec_success", [False] * len(data))[i],
+                    "invalid_action": data.non_tensor_batch.get("invalid_action", [True] * len(data))[i],
+                    "tool_cost": data.non_tensor_batch.get("tool_cost", [0.0] * len(data))[i],
+                }
+            )
+
+        scores = self.reward_fn(
+            records,
+            rule_weight=self.config.rule_weight,
+            judge_weight=self.config.judge_weight,
+            tool_gain_weight=self.config.tool_gain_weight,
+            invalid_penalty=self.config.invalid_penalty,
+            ineffective_penalty=self.config.ineffective_penalty,
+            judge_cache_path=self.config.judge_cache_path
+            or "./judge/cache/structured_chartqa_judge_cache.jsonl",
+        )
+        reward_tensor = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
+        reward_metrics = defaultdict(list)
+        for i, score in enumerate(scores):
+            reward_tensor[i, response_length[i] - 1] = score["overall"]
+            for key, value in score.items():
                 reward_metrics[key].append(value)
 
         return reward_tensor, reward_metrics

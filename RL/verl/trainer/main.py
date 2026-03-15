@@ -20,7 +20,13 @@ from omegaconf import OmegaConf
 from ..single_controller.ray import RayWorkerGroup
 from ..utils.tokenizer import get_processor, get_tokenizer
 from ..workers.fsdp_workers import FSDPWorker
-from ..workers.reward import BatchFunctionRewardManager, SequentialFunctionRewardManager, LLMBatchFunctionRewardManager, LLMDoubleBatchFunctionRewardManager
+from ..workers.reward import (
+    BatchFunctionRewardManager,
+    LLMBatchFunctionRewardManager,
+    LLMDoubleBatchFunctionRewardManager,
+    SequentialFunctionRewardManager,
+    StructuredChartQARewardManager,
+)
 from .config import PPOConfig
 from .data_loader import create_dataloader
 from .ray_trainer import RayPPOTrainer, ResourcePoolManager, Role
@@ -75,6 +81,8 @@ class Runner:
             RewardManager = LLMBatchFunctionRewardManager
         elif config.worker.reward.reward_type == "llm_double":
             RewardManager = LLMDoubleBatchFunctionRewardManager
+        elif config.worker.reward.reward_type == "structured_chartqa":
+            RewardManager = StructuredChartQARewardManager
         else:
             raise NotImplementedError(f"Unknown reward type {config.worker.reward.reward_type}.")
 

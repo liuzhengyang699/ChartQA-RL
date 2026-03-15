@@ -42,8 +42,8 @@ GLOBAL_BATCH_SIZE="${GLOBAL_BATCH_SIZE:-8}"
 MICRO_BATCH_SIZE="${MICRO_BATCH_SIZE:-2}"
 ROLLOUT_BATCH_SIZE="${ROLLOUT_BATCH_SIZE:-16}"
 VAL_BATCH_SIZE="${VAL_BATCH_SIZE:-256}"
-REWARD_TYPE="${REWARD_TYPE:-batch}"
-REWARD_FUNCTION="${REWARD_FUNCTION:-./examples/reward_function/refocus.py:compute_score}"
+REWARD_TYPE="${REWARD_TYPE:-structured_chartqa}"
+REWARD_FUNCTION="${REWARD_FUNCTION:-./examples/reward_function/structured_chartqa.py:compute_structured_scores}"
 
 if [ ! -d "${MODEL_PATH}" ]; then
     echo "Model path does not exist: ${MODEL_PATH}" >&2

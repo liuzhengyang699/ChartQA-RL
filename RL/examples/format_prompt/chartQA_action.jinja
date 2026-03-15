@@ -1,0 +1,21 @@
+{{ content | trim }}
+
+You are solving a ChartQA problem with a structured action space.
+Choose exactly one action and return a single JSON object only.
+
+Action schema:
+{
+  "decision": "direct" | "tool",
+  "chart_axis": "x" | "y",
+  "edit_mode": "mask" | "draw" | "highlight",
+  "targets": ["label1", "label2"]
+}
+
+Rules:
+1. Return valid JSON only. Do not include markdown, code fences, or explanations.
+2. Use `"decision": "direct"` when the original image is already enough to answer.
+3. Use `"decision": "tool"` only when focusing on a subset of x-values or y-values will help.
+4. When decision is `"tool"`, `targets` must be a non-empty list of labels copied from the provided chart values.
+5. When decision is `"direct"`, set `targets` to `[]`.
+6. Prefer the smallest useful target set.
+7. Do not answer the question yet. Only output the action JSON.

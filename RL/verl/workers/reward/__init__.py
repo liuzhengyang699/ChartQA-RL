@@ -13,7 +13,21 @@
 # limitations under the License.
 
 from .config import RewardConfig
-from .function import BatchFunctionRewardManager, FunctionRewardManager, SequentialFunctionRewardManager, LLMBatchFunctionRewardManager, LLMDoubleBatchFunctionRewardManager
+from .function import (
+    BatchFunctionRewardManager,
+    FunctionRewardManager,
+    LLMBatchFunctionRewardManager,
+    LLMDoubleBatchFunctionRewardManager,
+    SequentialFunctionRewardManager,
+    StructuredChartQARewardManager,
+)
 
-
-__all__ = ["BatchFunctionRewardManager", "FunctionRewardManager", "RewardConfig", "SequentialFunctionRewardManager", "LLMBatchFunctionRewardManager", "LLMDoubleBatchFunctionRewardManager"]
+__all__ = [
+    "BatchFunctionRewardManager",
+    "FunctionRewardManager",
+    "RewardConfig",
+    "SequentialFunctionRewardManager",
+    "LLMBatchFunctionRewardManager",
+    "LLMDoubleBatchFunctionRewardManager",
+    "StructuredChartQARewardManager",
+]

@@ -62,3 +62,8 @@ class BasePPOActor(ABC):
             such as ```loss```, ```grad_norm```, etc,.
         """
         pass
+
+    @abstractmethod
+    def update_supervised(self, data: DataProto) -> Dict[str, Any]:
+        """Run a teacher-forcing supervised update on replay samples."""
+        pass

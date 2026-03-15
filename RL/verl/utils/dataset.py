@@ -203,6 +203,12 @@ class RLHFDataset(Dataset, ImageProcessMixin):
     def __getitem__(self, index):
         example: dict = self.dataset[index]
         messages = self._build_messages(example)
+        if isinstance(messages[0]["content"], list):
+            formatted_prompt_text = "\n".join(
+                item["text"] for item in messages[0]["content"] if isinstance(item, dict) and item.get("type") == "text"
+            ).strip()
+        else:
+            formatted_prompt_text = str(messages[0]["content"])
 
         if self.image_key in example:
             prompt = self.processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
@@ -249,6 +255,8 @@ class RLHFDataset(Dataset, ImageProcessMixin):
 
         # we add metadata so it can be retrieved by the trainer (hopefully..?)
         example["metadata"] = example["metadata"]
+        example["rendered_prompt"] = prompt
+        example["formatted_prompt_text"] = formatted_prompt_text
         example["penalty"] = 0
         example["rollout_round"] = 0
         example["input_ids"] = input_ids

@@ -9,7 +9,7 @@ data:
   #for rollout batch size this should be increased on larger GPU clusters
   rollout_batch_size: 16
   val_batch_size: 512
-  format_prompt: ./examples/format_prompt/chartQA.jinja
+  format_prompt: ./examples/format_prompt/chartQA_action.jinja
   override_chat_template: null
   shuffle: true
   seed: 42
@@ -19,6 +19,8 @@ data:
 
 algorithm:
   adv_estimator: grpo
+  action_mode: structured
+  run_baseline_branch: true
   disable_kl: false
   use_kl_loss: true
   kl_penalty: low_var_kl
@@ -36,7 +38,7 @@ worker:
     micro_batch_size_per_device_for_update: 1
     micro_batch_size_per_device_for_experience: 8
     max_grad_norm: 1.0
-    padding_free: true
+    padding_free: false
     ulysses_sequence_parallel_size: 1
     model:
       model_path: null  # set by RL/train.sh from config/paths.json unless MODEL_PATH is provided
@@ -78,8 +80,14 @@ worker:
       offload_params: false
 
   reward:
-    reward_type: batch
-    reward_function: ./examples/reward_function/refocus.py:compute_score
+    reward_type: structured_chartqa
+    reward_function: ./examples/reward_function/structured_chartqa.py:compute_structured_scores
+    rule_weight: 0.4
+    judge_weight: 0.6
+    tool_gain_weight: 0.75
+    invalid_penalty: 1.0
+    ineffective_penalty: 0.25
+    judge_cache_path: ./judge/cache/structured_chartqa_judge_cache.jsonl
 
 trainer:
   total_epochs: 2000
@@ -103,3 +111,12 @@ trainer:
     sample_size_per_step: 64
     save_images: true
     max_steps: 200
+  replay:
+    enable: true
+    buffer_dir: null
+    buffer_size: 50000
+    min_final_mix: 0.8
+    min_tool_gain: 0.1
+    supervised_batch_size: 32
+    loss_weight_action: 0.4
+    loss_weight_answer: 0.6

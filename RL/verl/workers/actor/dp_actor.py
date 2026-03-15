@@ -20,6 +20,7 @@ from collections import defaultdict
 from typing import Any, Dict, Optional
 
 import torch
+import torch.nn.functional as F
 from einops import rearrange
 from ray.experimental.tqdm_ray import tqdm
 from torch import nn
@@ -285,5 +286,80 @@ class DataParallelPPOActor(BasePPOActor):
 
                 grad_norm = self._optimizer_step()
                 append_to_dict(metrics, {"actor/grad_norm": grad_norm.detach().item()})
+
+        return metrics
+
+    def _compute_supervised_micro_batch(self, micro_batch: Dict[str, torch.Tensor]) -> tuple[torch.Tensor, Dict[str, float]]:
+        if self.config.padding_free:
+            raise NotImplementedError("Supervised replay update requires padding_free=False.")
+
+        input_ids = micro_batch["input_ids"]
+        attention_mask = micro_batch["attention_mask"]
+        position_ids = micro_batch["position_ids"]
+        labels = micro_batch["labels"]
+        loss_weight = micro_batch["loss_weight"].view(-1)
+
+        if position_ids.dim() == 3:
+            position_ids = position_ids.transpose(0, 1)
+
+        multi_modal_inputs = {}
+        if "multi_modal_inputs" in micro_batch:
+            for key in micro_batch["multi_modal_inputs"][0].keys():
+                multi_modal_inputs[key] = torch.cat([inputs[key] for inputs in micro_batch["multi_modal_inputs"]], dim=0)
+
+        outputs = self.actor_module(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            **multi_modal_inputs,
+            use_cache=False,
+        )
+        logits = outputs.logits[:, :-1, :]
+        shifted_labels = labels[:, 1:]
+        valid_mask = shifted_labels.ne(-100)
+        token_loss = F.cross_entropy(
+            logits.reshape(-1, logits.size(-1)).float(),
+            shifted_labels.reshape(-1),
+            reduction="none",
+            ignore_index=-100,
+        ).view(shifted_labels.size(0), shifted_labels.size(1))
+        denom = valid_mask.sum(dim=-1).clamp_min(1)
+        sample_loss = token_loss.sum(dim=-1) / denom
+        weighted_loss = (sample_loss * loss_weight).sum() / loss_weight.sum().clamp_min(1e-8)
+
+        metrics = {
+            "aux/loss": weighted_loss.detach().item(),
+        }
+        return weighted_loss, metrics
+
+    def update_supervised(self, data: DataProto) -> Dict[str, Any]:
+        self.actor_module.train()
+        select_keys = ["input_ids", "attention_mask", "position_ids", "labels", "loss_weight"]
+        non_tensor_select_keys = ["supervision_kind"]
+        if "multi_modal_inputs" in data.non_tensor_batch.keys():
+            non_tensor_select_keys.append("multi_modal_inputs")
+
+        mini_batches = data.select(select_keys, non_tensor_select_keys).split(self.config.global_batch_size_per_device)
+        metrics = defaultdict(list)
+        for mini_batch in mini_batches:
+            micro_batches = mini_batch.split(self.config.micro_batch_size_per_device_for_update)
+            gradient_accumulation = max(len(micro_batches), 1)
+            if self.rank == 0:
+                micro_batches = tqdm(micro_batches, desc="Replay supervised update", position=3)
+
+            for micro_batch in micro_batches:
+                model_inputs = {**micro_batch.batch, **micro_batch.non_tensor_batch}
+                loss, batch_metrics = self._compute_supervised_micro_batch(model_inputs)
+                kinds = micro_batch.non_tensor_batch.get("supervision_kind")
+                if kinds is not None and len(kinds) > 0:
+                    action_count = sum(1 for item in kinds if str(item) == "action")
+                    answer_count = sum(1 for item in kinds if str(item) == "answer")
+                    batch_metrics["aux/action_fraction"] = action_count / len(kinds)
+                    batch_metrics["aux/answer_fraction"] = answer_count / len(kinds)
+                (loss / gradient_accumulation).backward()
+                append_to_dict(metrics, batch_metrics)
+
+            grad_norm = self._optimizer_step()
+            append_to_dict(metrics, {"aux/grad_norm": grad_norm.detach().item()})
 
         return metrics

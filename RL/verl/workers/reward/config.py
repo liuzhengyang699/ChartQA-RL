@@ -28,6 +28,12 @@ class RewardConfig:
     skip_special_tokens: bool = True
     double_reward: bool = False
     num_cpus: int = 1
+    rule_weight: float = 0.4
+    judge_weight: float = 0.6
+    tool_gain_weight: float = 0.75
+    invalid_penalty: float = 1.0
+    ineffective_penalty: float = 0.25
+    judge_cache_path: Optional[str] = None
     """auto keys"""
     reward_function_name: Optional[str] = field(default=None, init=False)
 
@@ -42,3 +48,5 @@ class RewardConfig:
                 self.reward_function = os.path.abspath(self.reward_function)
             else:
                 self.reward_function = None
+        if self.judge_cache_path is not None:
+            self.judge_cache_path = os.path.abspath(self.judge_cache_path)

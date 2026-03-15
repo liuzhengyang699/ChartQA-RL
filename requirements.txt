@@ -13,7 +13,7 @@ Jinja2==3.1.6
 mathruler==0.1.0
 mlflow==3.10.0
 modelscope>=1.25.0
-numpy==2.4.2
+numpy==1.26.4
 omegaconf==2.3.0
 openai==2.24.0
 opencv-python-headless==4.11.0.86
@@ -23,7 +23,7 @@ psutil==7.0.0
 pyarrow==22.0.0
 PyYAML==6.0.2
 qwen-vl-utils==0.0.14
-ray[default]>=2.30.0
+ray[default]==2.40.0
 safetensors>=0.5.3
 swanlab>=0.7.8
 tensordict==0.10.0
@@ -32,7 +32,7 @@ torch==2.5.1
 torchdata==0.11.0
 torchvision==0.20.1
 tqdm==4.67.1
-transformers>=4.57.0
+transformers==4.57.6
 trl>=0.18.1
 vllm==0.7.3
 wandb>=0.18.0

@@ -19,6 +19,8 @@
 
 SFT 基于 `Qwen3-VL-4B-Instruct` 在 ChartQA 上进行 LoRA 微调，merged model 作为后续 RL 的初始化模型。当前离线评测基于 `ChartQA test split (3272 samples)`。
 
+详见 [`LoRA/README.md`](LoRA/README.md)。
+
 | Model | Exact Match | Relaxed Match | Avg Similarity |
 | --- | ---: | ---: | ---: |
 | Base | 72.0% | 84.7% | 90.6% |
@@ -38,17 +40,22 @@ SFT 基于 `Qwen3-VL-4B-Instruct` 在 ChartQA 上进行 LoRA 微调，merged mod
 <table>
   <tr>
     <td align="center"><img src="assets/lora_metrics_overview.svg" alt="LoRA Overview" width="100%"></td>
+  </tr>
+  <tr>
     <td align="center"><img src="assets/lora_metrics_delta.svg" alt="LoRA Delta" width="100%"></td>
   </tr>
 </table>
 
 ## RL
 
-RL 部分基于 `VeRL` 提供 ChartQA 工具增强多模态训练入口，默认从 SFT merged model 初始化。
+RL 部分基于 `VeRL + GRPO` 实现面向 ChartQA 的两阶段结构化工具增强训练：第一阶段输出结构化动作 JSON，第二阶段在原图或工具增强图上生成最终答案，并结合差分收益 reward、LLM Judge、replay buffer 做联合优化。
+
+详见 [`RL/README.md`](RL/README.md)。
 
 | 项目 | 默认值 |
 | --- | --- |
 | 训练入口 | `RL/train.sh` |
+| 动作空间 | `decision / chart_axis / edit_mode / targets` 结构化 JSON |
 | 初始化模型 | `sft_merged_dir` |
 | 训练数据 | `rl_parquet_dir/train_full.parquet` |
 | 验证数据 | `rl_parquet_dir/val_full.parquet` |
@@ -85,7 +92,9 @@ python LoRA/chartqa_eval.py --config LoRA/configs/chartqa_qwen3vl4b.json
 
 ```bash
 bash RL/data/preprocess_data.sh
+cp RL/judge/judge_info.example.json RL/judge/judge_info.json
 bash RL/train.sh
+python RL/evaluate_structured.py --model_path /abs/path/to/model_or_actor
 ```
 
 常用覆盖项：

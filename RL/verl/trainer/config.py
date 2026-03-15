@@ -63,6 +63,8 @@ class AlgorithmConfig:
     gamma: float = 1.0
     lam: float = 1.0
     adv_estimator: str = "grpo"
+    action_mode: str = "structured"
+    run_baseline_branch: bool = True
     disable_kl: bool = False
     use_kl_loss: bool = False
     kl_penalty: str = "kl"
@@ -86,6 +88,22 @@ class TraceConfig:
 
 
 @dataclass
+class ReplayConfig:
+    enable: bool = True
+    buffer_dir: Optional[str] = None
+    buffer_size: int = 50000
+    min_final_mix: float = 0.8
+    min_tool_gain: float = 0.1
+    supervised_batch_size: int = 32
+    loss_weight_action: float = 0.4
+    loss_weight_answer: float = 0.6
+
+    def post_init(self):
+        if self.buffer_dir is not None:
+            self.buffer_dir = os.path.abspath(self.buffer_dir)
+
+
+@dataclass
 class TrainerConfig:
 
     total_epochs: int = 10
@@ -106,6 +124,7 @@ class TrainerConfig:
     save_checkpoint_path: Optional[str] = None
     load_checkpoint_path: Optional[str] = None
     trace: TraceConfig = field(default_factory=TraceConfig)
+    replay: ReplayConfig = field(default_factory=ReplayConfig)
 
     def post_init(self):
         if self.save_checkpoint_path is None:
@@ -119,6 +138,8 @@ class TrainerConfig:
             self.trace.output_dir = os.path.join(self.save_checkpoint_path, "trace")
         if self.trace.output_dir is not None:
             self.trace.output_dir = os.path.abspath(self.trace.output_dir)
+        if self.replay.buffer_dir is None:
+            self.replay.buffer_dir = os.path.join(self.save_checkpoint_path, "replay")
 
 
 @dataclass

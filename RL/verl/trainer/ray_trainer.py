@@ -51,8 +51,18 @@ from .metrics import compute_data_metrics, compute_throughout_metrics, compute_t
 from ..tooluse.parse import Parser
 from ..tooluse.execution import CodeExecutor
 from ..tooluse.tools import *
+from ..tooluse.structured_chartqa import (
+    build_baseline_answer_prompt,
+    build_generation_feature,
+    build_tool_answer_prompt,
+    build_supervised_feature,
+    execute_validated_action,
+    parse_action_response,
+    validate_action_payload,
+)
 from PIL import Image
 from ..utils.dataset import collate_fn
+from .replay_buffer import ReplayBuffer
 
 from ..utils import torch_functional as VF
 
@@ -237,6 +247,18 @@ class RayPPOTrainer:
             self._trace_max_steps = int(config.trainer.trace.max_steps)
         if self._trace_enable and self._trace_dir:
             os.makedirs(self._trace_dir, exist_ok=True)
+
+        self.replay_buffer: Optional[ReplayBuffer] = None
+        replay_config = getattr(config.trainer, "replay", None)
+        if replay_config is not None and replay_config.enable:
+            self.replay_buffer = ReplayBuffer(
+                buffer_dir=replay_config.buffer_dir,
+                buffer_size=replay_config.buffer_size,
+                per_figure_limit=3,
+                min_final_mix=replay_config.min_final_mix,
+                min_tool_gain=replay_config.min_tool_gain,
+                seed=getattr(config.data, "seed", 42),
+            )
 
         self.hybrid_engine = config.worker.hybrid_engine
         if self.hybrid_engine:
@@ -451,6 +473,490 @@ class RayPPOTrainer:
     def quick_save(self, file_name, text):
         with open(file_name, 'w') as file:
             file.write(text)
+
+    def _ensure_image_cache(self, batch: DataProto) -> None:
+        if "image_1_pil" in batch.non_tensor_batch:
+            return
+        mm = batch.non_tensor_batch.get("multi_modal_data", None)
+        if mm is None:
+            return
+        image_1_pil = []
+        for item in mm:
+            img0 = None
+            if isinstance(item, dict):
+                imgs = item.get("image", None)
+                if isinstance(imgs, list) and len(imgs) > 0 and isinstance(imgs[0], Image.Image):
+                    img0 = imgs[0]
+            image_1_pil.append(img0)
+        batch.non_tensor_batch["image_1_pil"] = np.array(image_1_pil, dtype=object)
+
+    def _resolve_figure_path(self, figure_path: str) -> str:
+        candidates = []
+        if os.path.isabs(figure_path):
+            candidates.append(figure_path)
+        else:
+            candidates.extend(
+                [
+                    figure_path,
+                    os.path.join(os.getcwd(), figure_path),
+                    os.path.join(self._project_root, figure_path),
+                ]
+            )
+        for candidate in candidates:
+            if os.path.exists(candidate):
+                return candidate
+        raise FileNotFoundError(figure_path)
+
+    def _load_original_image(self, batch: DataProto, index: int) -> Image.Image:
+        image_1_pil = batch.non_tensor_batch.get("image_1_pil", None)
+        if image_1_pil is not None and index < len(image_1_pil) and isinstance(image_1_pil[index], Image.Image):
+            return image_1_pil[index].copy()
+
+        figure_path = str(batch.non_tensor_batch["figure_path"][index])
+        with Image.open(self._resolve_figure_path(figure_path)) as image:
+            return image.convert("RGB")
+
+    def _generate_branch_outputs(self, requests: List[Dict[str, Any]]) -> Dict[int, Dict[str, Any]]:
+        if not requests:
+            return {}
+
+        process_image = self.val_dataloader.dataset.process_image
+        features = []
+        for request in requests:
+            feature = build_generation_feature(
+                processor=self.processor,
+                tokenizer=self.tokenizer,
+                prompt_text=request["prompt_text"],
+                images=request["images"],
+                max_prompt_length=self.val_dataloader.dataset.max_prompt_length,
+                truncation=self.val_dataloader.dataset.truncation,
+                process_image=process_image,
+            )
+            feature["request_index"] = request["request_index"]
+            feature["prompt_text"] = request["prompt_text"]
+            features.append(feature)
+
+        branch_batch = DataProto.from_single_dict(collate_fn(features))
+        gen_batch = branch_batch.pop(
+            batch_keys=["input_ids", "attention_mask", "position_ids"],
+            non_tensor_batch_keys=["raw_prompt_ids", "multi_modal_data"],
+        )
+        gen_batch.meta_info = dict(self.config.worker.rollout.val_override_config)
+        gen_batch, pad_size = pad_dataproto_to_divisor(gen_batch, self.actor_rollout_wg.world_size)
+        output_batch = self.actor_rollout_wg.generate_sequences(gen_batch)
+        output_batch = unpad_dataproto(output_batch, pad_size=pad_size)
+        branch_batch = branch_batch.union(output_batch)
+
+        response_ids = branch_batch.batch["responses"]
+        results: Dict[int, Dict[str, Any]] = {}
+        for i in range(len(branch_batch)):
+            decoded = self.tokenizer.decode(response_ids[i], skip_special_tokens=True)
+            results[int(branch_batch.non_tensor_batch["request_index"][i])] = {
+                "text": decoded,
+                "prompt_text": str(branch_batch.non_tensor_batch["prompt_text"][i]),
+            }
+        return results
+
+    def _process_structured_chartqa_batch(self, batch: DataProto) -> tuple[DataProto, Dict[str, int]]:
+        self._ensure_image_cache(batch)
+        response_ids = batch.batch["responses"]
+        response_mask = batch.batch["response_mask"]
+        response_texts = []
+        for i in range(len(batch)):
+            resp_len = int(response_mask[i].sum().item())
+            response_texts.append(self.tokenizer.decode(response_ids[i][:resp_len], skip_special_tokens=True))
+
+        n = len(batch)
+        action_valid = np.zeros(n, dtype=object)
+        invalid_action = np.zeros(n, dtype=object)
+        tool_requested = np.zeros(n, dtype=object)
+        tool_exec_success = np.zeros(n, dtype=object)
+        decisions = np.empty(n, dtype=object)
+        chart_axes = np.empty(n, dtype=object)
+        edit_modes = np.empty(n, dtype=object)
+        targets_json = np.empty(n, dtype=object)
+        tool_names = np.empty(n, dtype=object)
+        tool_costs = np.zeros(n, dtype=object)
+        action_target_json = np.empty(n, dtype=object)
+        action_error_code = np.empty(n, dtype=object)
+        baseline_prompt_text = np.empty(n, dtype=object)
+        tool_prompt_text = np.empty(n, dtype=object)
+        answer_prompt_text = np.empty(n, dtype=object)
+        baseline_answer_text = np.empty(n, dtype=object)
+        tool_answer_text = np.empty(n, dtype=object)
+        final_answer_text = np.empty(n, dtype=object)
+        tool_edited_image_path = np.empty(n, dtype=object)
+        tool_original_image_path = np.empty(n, dtype=object)
+
+        baseline_requests: List[Dict[str, Any]] = []
+        tool_requests: List[Dict[str, Any]] = []
+
+        trace_enable = self._trace_enable and bool(self._trace_dir) and (self._trace_max_steps <= 0 or self.global_step <= self._trace_max_steps)
+        trace_step_dir = None
+        if trace_enable:
+            trace_step_dir = os.path.join(self._trace_dir, f"step_{self.global_step:06d}")
+            os.makedirs(trace_step_dir, exist_ok=True)
+
+        stats = {
+            "tool_requested": 0,
+            "tool_legal": 0,
+            "tool_exec_success": 0,
+            "invalid_action": 0,
+        }
+
+        for index, response_text in enumerate(response_texts):
+            metadata = json.loads(batch.non_tensor_batch["metadata"][index])
+            query = str(batch.non_tensor_batch["query"][index])
+            rendered_prompt = str(batch.non_tensor_batch.get("rendered_prompt", batch.non_tensor_batch["prompt"])[index])
+
+            parse_result = parse_action_response(response_text)
+            validated = validate_action_payload(parse_result.get("payload"), metadata)
+            decisions[index] = validated["decision"]
+            chart_axes[index] = validated["chart_axis"]
+            edit_modes[index] = validated["edit_mode"]
+            targets_json[index] = json.dumps(validated["targets"], ensure_ascii=False)
+            tool_names[index] = validated.get("tool_name", "")
+            action_target_json[index] = validated["canonical_action_json"]
+            action_error_code[index] = validated.get("error_code") or parse_result.get("error_code") or ""
+
+            tool_requested[index] = validated["decision"] == "tool"
+            if tool_requested[index]:
+                stats["tool_requested"] += 1
+
+            original_image = self._load_original_image(batch, index)
+            if trace_enable and trace_step_dir is not None:
+                original_path = os.path.join(trace_step_dir, f"img_{index}_orig.png")
+                original_image.save(original_path)
+                tool_original_image_path[index] = original_path
+            else:
+                tool_original_image_path[index] = ""
+
+            baseline_prompt = build_baseline_answer_prompt(query)
+            baseline_prompt_text[index] = baseline_prompt
+            baseline_requests.append(
+                {
+                    "request_index": index,
+                    "prompt_text": baseline_prompt,
+                    "images": [original_image.copy()],
+                }
+            )
+
+            executed = execute_validated_action(validated, original_image.copy(), metadata)
+            action_valid[index] = bool(validated["valid"])
+            if action_valid[index] and tool_requested[index]:
+                stats["tool_legal"] += 1
+
+            if validated["decision"] == "tool" and validated["valid"]:
+                tool_costs[index] = 0.05 + 0.01 * max(0, len(validated["targets"]) - 1)
+            else:
+                tool_costs[index] = 0.0
+
+            if executed["decision"] == "tool" and executed["tool_exec_success"]:
+                tool_exec_success[index] = True
+                stats["tool_exec_success"] += 1
+                tool_prompt = build_tool_answer_prompt(query, executed)
+                tool_prompt_text[index] = tool_prompt
+                tool_requests.append(
+                    {
+                        "request_index": index,
+                        "prompt_text": tool_prompt,
+                        "images": [original_image.copy(), executed["edited_image"].copy()],
+                    }
+                )
+                if trace_enable and trace_step_dir is not None:
+                    edited_path = os.path.join(trace_step_dir, f"img_{index}_edited.png")
+                    executed["edited_image"].save(edited_path)
+                    tool_edited_image_path[index] = edited_path
+                else:
+                    tool_edited_image_path[index] = ""
+            else:
+                tool_exec_success[index] = False
+                tool_prompt_text[index] = ""
+                tool_edited_image_path[index] = ""
+
+            invalid_flag = (not validated["valid"]) or (
+                validated["decision"] == "tool" and not executed["tool_exec_success"]
+            )
+            invalid_action[index] = bool(invalid_flag)
+            if invalid_flag:
+                stats["invalid_action"] += 1
+
+            answer_prompt_text[index] = baseline_prompt
+            baseline_answer_text[index] = ""
+            tool_answer_text[index] = ""
+            final_answer_text[index] = ""
+
+        baseline_outputs = self._generate_branch_outputs(baseline_requests)
+        tool_outputs = self._generate_branch_outputs(tool_requests)
+
+        for index in range(n):
+            baseline_answer_text[index] = baseline_outputs.get(index, {}).get("text", "")
+            final_answer_text[index] = baseline_answer_text[index]
+            answer_prompt_text[index] = baseline_outputs.get(index, {}).get("prompt_text", str(baseline_prompt_text[index]))
+            if bool(tool_exec_success[index]):
+                tool_answer_text[index] = tool_outputs.get(index, {}).get("text", "")
+                if tool_answer_text[index]:
+                    final_answer_text[index] = tool_answer_text[index]
+                    answer_prompt_text[index] = tool_outputs.get(index, {}).get("prompt_text", str(tool_prompt_text[index]))
+
+        batch.non_tensor_batch["action_valid"] = action_valid
+        batch.non_tensor_batch["invalid_action"] = invalid_action
+        batch.non_tensor_batch["tool_requested"] = tool_requested
+        batch.non_tensor_batch["tool_exec_success"] = tool_exec_success
+        batch.non_tensor_batch["decision"] = decisions
+        batch.non_tensor_batch["chart_axis"] = chart_axes
+        batch.non_tensor_batch["edit_mode"] = edit_modes
+        batch.non_tensor_batch["targets_json"] = targets_json
+        batch.non_tensor_batch["tool_name"] = tool_names
+        batch.non_tensor_batch["tool_cost"] = tool_costs
+        batch.non_tensor_batch["action_target_json"] = action_target_json
+        batch.non_tensor_batch["action_error_code"] = action_error_code
+        batch.non_tensor_batch["baseline_prompt_text"] = baseline_prompt_text
+        batch.non_tensor_batch["tool_prompt_text"] = tool_prompt_text
+        batch.non_tensor_batch["answer_prompt_text"] = answer_prompt_text
+        batch.non_tensor_batch["baseline_answer_text"] = baseline_answer_text
+        batch.non_tensor_batch["tool_answer_text"] = tool_answer_text
+        batch.non_tensor_batch["final_answer_text"] = final_answer_text
+        batch.non_tensor_batch["tool_edited_image_path"] = tool_edited_image_path
+        batch.non_tensor_batch["tool_original_image_path"] = tool_original_image_path
+        return batch, stats
+
+    def _aggregate_structured_metrics(
+        self,
+        reward_metrics_lst: Dict[str, List[float]],
+        stats_total: Dict[str, float],
+    ) -> Dict[str, float]:
+        requested = max(stats_total["tool_requested"], 1.0)
+        legal = max(stats_total["tool_legal"], 1.0)
+        success = max(stats_total["tool_exec_success"], 1.0)
+        total = max(stats_total["num_examples"], 1.0)
+        avg_tool_gain = 0.0
+        tool_gain_values = reward_metrics_lst.get("tool_gain", [])
+        if tool_gain_values and stats_total["tool_exec_success"] > 0:
+            avg_tool_gain = sum(
+                value for value, executed in zip(tool_gain_values, stats_total["tool_exec_success_mask"]) if executed
+            ) / success
+
+        return {
+            "val/QAAccuracy": float(np.mean(reward_metrics_lst.get("answer_accuracy", [0.0]))),
+            "val/ToolCallRate": stats_total["tool_requested"] / total,
+            "val/LegalActionRate": stats_total["tool_legal"] / total,
+            "val/ToolExecSuccessRate": stats_total["tool_exec_success"] / legal,
+            "val/ToolEffectivenessRate": float(np.mean(reward_metrics_lst.get("effective_tool", [0.0]))) if success else 0.0,
+            "val/AvgToolGain": avg_tool_gain,
+            "val/InvalidActionRate": stats_total["invalid_action"] / total,
+            "val/JudgeScore": float(np.mean(reward_metrics_lst.get("judge_score", [0.0]))),
+            "val/RewardScore": float(np.mean(reward_metrics_lst.get("overall", [0.0]))),
+        }
+
+    def _build_replay_entries(self, batch: DataProto, reward_metrics: Dict[str, List[float]]) -> List[Dict[str, object]]:
+        entries: List[Dict[str, object]] = []
+        image_dir = None
+        if self.replay_buffer is not None:
+            image_dir = self.replay_buffer.buffer_dir / "images"
+            image_dir.mkdir(parents=True, exist_ok=True)
+        for i in range(len(batch)):
+            final_answer = str(batch.non_tensor_batch["final_answer_text"][i])
+            baseline_answer = str(batch.non_tensor_batch["baseline_answer_text"][i])
+            if not final_answer or not baseline_answer:
+                continue
+
+            tool_metadata = {
+                "decision": str(batch.non_tensor_batch["decision"][i]),
+                "chart_axis": str(batch.non_tensor_batch["chart_axis"][i]),
+                "edit_mode": str(batch.non_tensor_batch["edit_mode"][i]),
+                "targets_json": str(batch.non_tensor_batch["targets_json"][i]),
+                "tool_name": str(batch.non_tensor_batch["tool_name"][i]),
+                "metadata_json": str(batch.non_tensor_batch["metadata"][i]),
+                "tool_exec_success": bool(batch.non_tensor_batch["tool_exec_success"][i]),
+            }
+            final_mix = float(reward_metrics["final_mix"][i])
+            baseline_mix = float(reward_metrics["baseline_mix"][i])
+            tool_gain = float(reward_metrics["tool_gain"][i])
+            quality_score = final_mix + max(0.0, tool_gain)
+            decision = tool_metadata["decision"]
+            effective_tool = float(reward_metrics["effective_tool"][i]) > 0.5
+            invalid_flag = bool(batch.non_tensor_batch["invalid_action"][i])
+            stored_image_path = ""
+            if image_dir is not None:
+                image_name = f"{str(batch.non_tensor_batch['figure_id'][i]).replace('/', '_')}.png"
+                stored_path = image_dir / image_name
+                if not stored_path.exists():
+                    original_image = batch.non_tensor_batch.get("image_1_pil", [None] * len(batch))[i]
+                    if isinstance(original_image, Image.Image):
+                        original_image.save(stored_path)
+                if stored_path.exists():
+                    stored_image_path = str(stored_path)
+
+            if effective_tool:
+                bucket = "tool_positive"
+                action_json = str(batch.non_tensor_batch["action_target_json"][i])
+                answer_prompt = str(batch.non_tensor_batch["answer_prompt_text"][i])
+                answer_target = final_answer
+                entry_final_mix = final_mix
+                entry_tool_gain = tool_gain
+            elif decision == "direct" and final_mix >= 0.9:
+                bucket = "direct_high_confidence"
+                action_json = str(batch.non_tensor_batch["action_target_json"][i])
+                answer_prompt = str(batch.non_tensor_batch["answer_prompt_text"][i])
+                answer_target = final_answer
+                entry_final_mix = final_mix
+                entry_tool_gain = tool_gain
+            elif (invalid_flag or tool_gain <= 0.0) and baseline_mix >= 0.9:
+                bucket = "hard_negative_repaired"
+                repaired_tool_metadata = {
+                    **tool_metadata,
+                    "decision": "direct",
+                    "chart_axis": "x",
+                    "edit_mode": "highlight",
+                    "targets_json": "[]",
+                    "repaired_from_invalid": invalid_flag,
+                }
+                entries.append(
+                    {
+                        "figure_id": str(batch.non_tensor_batch["figure_id"][i]),
+                        "figure_path": str(batch.non_tensor_batch["figure_path"][i]),
+                        "query": str(batch.non_tensor_batch["query"][i]),
+                        "action_prompt": str(batch.non_tensor_batch["formatted_prompt_text"][i]),
+                        "action_target_json": json.dumps(
+                            {"decision": "direct", "chart_axis": "x", "edit_mode": "highlight", "targets": []},
+                            ensure_ascii=False,
+                            sort_keys=True,
+                        ),
+                        "answer_prompt": str(batch.non_tensor_batch["baseline_prompt_text"][i]),
+                        "answer_target_text": baseline_answer,
+                        "quality_score": baseline_mix,
+                        "tool_gain": 0.0,
+                        "final_mix": baseline_mix,
+                        "baseline_mix": baseline_mix,
+                        "bucket": bucket,
+                        "stored_image_path": stored_image_path,
+                        "tool_metadata": repaired_tool_metadata,
+                    }
+                )
+                continue
+            else:
+                continue
+
+            entries.append(
+                {
+                    "figure_id": str(batch.non_tensor_batch["figure_id"][i]),
+                    "figure_path": str(batch.non_tensor_batch["figure_path"][i]),
+                    "query": str(batch.non_tensor_batch["query"][i]),
+                    "action_prompt": str(batch.non_tensor_batch["formatted_prompt_text"][i]),
+                    "action_target_json": action_json,
+                    "answer_prompt": answer_prompt,
+                    "answer_target_text": answer_target,
+                    "quality_score": quality_score,
+                    "tool_gain": entry_tool_gain,
+                    "final_mix": entry_final_mix,
+                    "baseline_mix": baseline_mix,
+                    "bucket": bucket,
+                    "stored_image_path": stored_image_path,
+                    "tool_metadata": tool_metadata,
+                }
+            )
+        return entries
+
+    def _maybe_update_replay_buffer(self, batch: DataProto, reward_metrics: Dict[str, List[float]]) -> None:
+        if self.replay_buffer is None:
+            return
+        entries = self._build_replay_entries(batch, reward_metrics)
+        self.replay_buffer.add_entries(entries)
+
+    def _reconstruct_answer_images(self, entry: Dict[str, object]) -> List[Image.Image]:
+        source_path = str(entry.get("stored_image_path") or entry["figure_path"])
+        figure_path = self._resolve_figure_path(source_path)
+        with Image.open(figure_path) as image:
+            original_image = image.convert("RGB")
+
+        tool_metadata = dict(entry.get("tool_metadata", {}))
+        decision = str(tool_metadata.get("decision", "direct"))
+        if decision != "tool" or not bool(tool_metadata.get("tool_exec_success", False)):
+            return [original_image]
+
+        metadata = json.loads(str(tool_metadata["metadata_json"]))
+        action = {
+            "decision": "tool",
+            "chart_axis": str(tool_metadata.get("chart_axis", "x")),
+            "edit_mode": str(tool_metadata.get("edit_mode", "highlight")),
+            "targets": json.loads(str(tool_metadata.get("targets_json", "[]"))),
+        }
+        validated = validate_action_payload(action, metadata)
+        executed = execute_validated_action(validated, original_image.copy(), metadata)
+        if executed["tool_exec_success"]:
+            return [original_image, executed["edited_image"]]
+        return [original_image]
+
+    def _build_replay_supervised_batch(
+        self,
+        action_entries: List[Dict[str, object]],
+        answer_entries: List[Dict[str, object]],
+    ) -> Optional[DataProto]:
+        if not action_entries and not answer_entries:
+            return None
+
+        process_image = self.train_dataloader.dataset.process_image
+        features: List[Dict[str, Any]] = []
+        replay_config = self.config.trainer.replay
+
+        for entry in action_entries:
+            figure_path = self._resolve_figure_path(str(entry["figure_path"]))
+            with Image.open(figure_path) as image:
+                original_image = image.convert("RGB")
+            feature = build_supervised_feature(
+                processor=self.processor,
+                tokenizer=self.tokenizer,
+                prompt_text=str(entry["action_prompt"]),
+                images=[original_image],
+                assistant_text=str(entry["action_target_json"]),
+                max_prompt_length=self.train_dataloader.dataset.max_prompt_length,
+                truncation=self.train_dataloader.dataset.truncation,
+                process_image=process_image,
+                loss_weight=replay_config.loss_weight_action,
+            )
+            feature["supervision_kind"] = "action"
+            features.append(feature)
+
+        for entry in answer_entries:
+            images = self._reconstruct_answer_images(entry)
+            feature = build_supervised_feature(
+                processor=self.processor,
+                tokenizer=self.tokenizer,
+                prompt_text=str(entry["answer_prompt"]),
+                images=images,
+                assistant_text=str(entry["answer_target_text"]),
+                max_prompt_length=self.train_dataloader.dataset.max_prompt_length,
+                truncation=self.train_dataloader.dataset.truncation,
+                process_image=process_image,
+                loss_weight=replay_config.loss_weight_answer,
+            )
+            feature["supervision_kind"] = "answer"
+            features.append(feature)
+
+        if not features:
+            return None
+        replay_batch = DataProto.from_single_dict(collate_fn(features))
+        replay_batch.meta_info["global_token_num"] = torch.sum(replay_batch.batch["attention_mask"], dim=-1).tolist()
+        return replay_batch
+
+    def _maybe_run_replay_update(self, metrics: Dict[str, Any]) -> None:
+        if self.replay_buffer is None or len(self.replay_buffer) == 0:
+            return
+
+        replay_config = self.config.trainer.replay
+        action_entries, answer_entries = self.replay_buffer.sample_supervision(
+            total_batch_size=replay_config.supervised_batch_size,
+            action_weight=replay_config.loss_weight_action,
+            answer_weight=replay_config.loss_weight_answer,
+        )
+        replay_batch = self._build_replay_supervised_batch(action_entries, answer_entries)
+        if replay_batch is None:
+            return
+
+        actor_output = self.actor_rollout_wg.update_actor_supervised(replay_batch)
+        aux_metrics = reduce_metrics(actor_output.non_tensor_batch)
+        metrics.update(aux_metrics)
 
     def get_tool_context(self):
         context = {
@@ -1014,6 +1520,81 @@ class RayPPOTrainer:
         sample_inputs, sample_outputs, sample_labels, sample_scores = [], [], [], []
         reward_metrics_lst = defaultdict(list)
 
+        if self.config.algorithm.action_mode == "structured":
+            stats_total = {
+                "tool_requested": 0.0,
+                "action_legal": 0.0,
+                "tool_legal": 0.0,
+                "tool_exec_success": 0.0,
+                "invalid_action": 0.0,
+                "num_examples": 0.0,
+            }
+            success_mask_all: List[bool] = []
+
+            for batch_dict in self.val_dataloader:
+                test_batch = DataProto.from_single_dict(batch_dict)
+                self._ensure_image_cache(test_batch)
+
+                sample_inputs.extend(test_batch.non_tensor_batch["query"].tolist())
+                sample_labels.extend(test_batch.non_tensor_batch["ground_truth"].tolist())
+
+                test_gen_batch = test_batch.pop(
+                    batch_keys=["input_ids", "attention_mask", "position_ids"],
+                    non_tensor_batch_keys=["raw_prompt_ids", "multi_modal_data"],
+                )
+                test_gen_batch.meta_info = self.config.worker.rollout.val_override_config
+                test_gen_batch, pad_size = pad_dataproto_to_divisor(test_gen_batch, self.actor_rollout_wg.world_size)
+                test_output_gen_batch = self.actor_rollout_wg.generate_sequences(test_gen_batch)
+                test_output_gen_batch = unpad_dataproto(test_output_gen_batch, pad_size=pad_size)
+                test_batch = test_batch.union(test_output_gen_batch)
+                test_batch, batch_stats = self._process_structured_chartqa_batch(test_batch)
+
+                reward_tensor, reward_metrics = ray.get(self.val_reward_fn.compute_reward.remote(test_batch))
+                reward_tensor_lst.append(reward_tensor)
+                for key, value in reward_metrics.items():
+                    reward_metrics_lst[key].extend(value)
+
+                sample_outputs.extend(test_batch.non_tensor_batch["final_answer_text"].tolist())
+                scores = reward_tensor.sum(-1).cpu().tolist()
+                sample_scores.extend(scores)
+
+                stats_total["tool_requested"] += float(np.sum(test_batch.non_tensor_batch["tool_requested"].astype(bool)))
+                stats_total["action_legal"] += float(np.sum(test_batch.non_tensor_batch["action_valid"].astype(bool)))
+                stats_total["tool_legal"] += float(np.sum(test_batch.non_tensor_batch["action_valid"].astype(bool) & test_batch.non_tensor_batch["tool_requested"].astype(bool)))
+                stats_total["tool_exec_success"] += float(np.sum(test_batch.non_tensor_batch["tool_exec_success"].astype(bool)))
+                stats_total["invalid_action"] += float(np.sum(test_batch.non_tensor_batch["invalid_action"].astype(bool)))
+                stats_total["num_examples"] += float(len(test_batch))
+                success_mask_all.extend(test_batch.non_tensor_batch["tool_exec_success"].astype(bool).tolist())
+
+            self._maybe_log_val_generations(sample_inputs, sample_outputs, sample_labels, sample_scores)
+            reward_score = torch.cat(reward_tensor_lst, dim=0).sum(-1).mean().item() if reward_tensor_lst else 0.0
+            val_reward_metrics = {f"val/{key}_reward": value for key, value in reduce_metrics(reward_metrics_lst).items()}
+            legal_denom = max(stats_total["tool_legal"], 1.0)
+            success_denom = max(stats_total["tool_exec_success"], 1.0)
+            total = max(stats_total["num_examples"], 1.0)
+            tool_gain_values = reward_metrics_lst.get("tool_gain", [])
+            avg_tool_gain = (
+                sum(value for value, success in zip(tool_gain_values, success_mask_all) if success) / success_denom
+                if tool_gain_values
+                else 0.0
+            )
+            structured_metrics = {
+                "val/reward_score": reward_score,
+                "val/QAAccuracy": float(np.mean(reward_metrics_lst.get("answer_accuracy", [0.0]))),
+                "val/ToolCallRate": stats_total["tool_requested"] / total,
+                "val/LegalActionRate": stats_total["action_legal"] / total,
+                "val/ToolExecSuccessRate": stats_total["tool_exec_success"] / legal_denom,
+                "val/ToolEffectivenessRate": (
+                    sum(value for value, success in zip(reward_metrics_lst.get("effective_tool", []), success_mask_all) if success)
+                    / success_denom
+                ),
+                "val/AvgToolGain": avg_tool_gain,
+                "val/InvalidActionRate": stats_total["invalid_action"] / total,
+                "val/JudgeScore": float(np.mean(reward_metrics_lst.get("judge_score", [0.0]))),
+                "val/RewardScore": float(np.mean(reward_metrics_lst.get("overall", [0.0]))),
+            }
+            return {**structured_metrics, **val_reward_metrics}
+
         tool_stats = {
             "num_tool_calls" : 0,
             "num_direct" : 0,
@@ -1299,8 +1880,9 @@ class RayPPOTrainer:
 
             new_batch = new_batch.repeat(repeat_times=self.config.worker.rollout.n, interleave=True)
             new_batch = new_batch.union(gen_batch_output)
-
-            if getattr(self.config.worker.reward, "double_reward", False) and "metadata" in new_batch.non_tensor_batch:
+            if self.config.algorithm.action_mode == "structured" and "metadata" in new_batch.non_tensor_batch:
+                new_batch, _ = self._process_structured_chartqa_batch(new_batch)
+            elif getattr(self.config.worker.reward, "double_reward", False) and "metadata" in new_batch.non_tensor_batch:
                 new_batch, _ = self.get_second_rollout_batch(
                     gen_batch_output, new_batch, append=self.config.worker.reward.double_reward
                 )
@@ -1379,6 +1961,9 @@ class RayPPOTrainer:
                     with timer("reward", timing_raw):
                         reward_tensor, reward_metrics = ray.get(self.reward_fn.compute_reward.remote(batch))
 
+                    if self.config.algorithm.action_mode == "structured":
+                        self._maybe_update_replay_buffer(batch, reward_metrics)
+
                     self._maybe_trace_step(batch, reward_tensor, reward_metrics)
                     batch.batch = batch.batch.clone()
                     batch.batch.set("token_level_scores", reward_tensor)
@@ -1432,6 +2017,8 @@ class RayPPOTrainer:
 
                         actor_metrics = reduce_metrics(actor_output.non_tensor_batch)
                         metrics.update(actor_metrics)
+                        if self.config.algorithm.action_mode == "structured":
+                            self._maybe_run_replay_update(metrics)
 
                     if (
                         self.val_reward_fn is not None
@@ -1510,7 +2097,9 @@ class RayPPOTrainer:
                         batch = batch.repeat(repeat_times=self.config.worker.rollout.n, interleave=True)
 
                         batch = batch.union(gen_batch_output)
-                        if getattr(self.config.worker.reward, "double_reward", False) and "metadata" in batch.non_tensor_batch:
+                        if self.config.algorithm.action_mode == "structured" and "metadata" in batch.non_tensor_batch:
+                            batch, _ = self._process_structured_chartqa_batch(batch)
+                        elif getattr(self.config.worker.reward, "double_reward", False) and "metadata" in batch.non_tensor_batch:
                             batch, _ = self.get_second_rollout_batch(
                                 gen_batch_output, batch, append=self.config.worker.reward.double_reward
                             )
@@ -1521,6 +2110,8 @@ class RayPPOTrainer:
                             reward_ref = self.reward_fn.compute_reward.remote(batch)
 
                         reward_tensor, reward_metrics = ray.get(reward_ref)
+                        if self.config.algorithm.action_mode == "structured":
+                            self._maybe_update_replay_buffer(batch, reward_metrics)
                         self._maybe_trace_step(batch, reward_tensor, reward_metrics)
                         try:
                             if "token_level_scores" in batch.batch.keys():
@@ -1610,6 +2201,8 @@ class RayPPOTrainer:
 
                         actor_metrics = reduce_metrics(actor_output.non_tensor_batch)
                         metrics.update(actor_metrics)
+                        if self.config.algorithm.action_mode == "structured":
+                            self._maybe_run_replay_update(metrics)
 
                     # validate
                     if (

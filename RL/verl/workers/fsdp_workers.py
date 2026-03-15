@@ -15,6 +15,8 @@
 The main entry point to run the PPO algorithm
 """
 
+import importlib.util
+import os
 from typing import Literal, Optional, Union
 
 import numpy as np
@@ -58,6 +60,22 @@ from .config import ActorConfig, CriticConfig, FSDPConfig, ModelConfig, OptimCon
 from .rollout import vLLMRollout
 from .sharding_manager import FSDPVLLMShardingManager
 from .sharding_manager.fsdp_ulysses import FSDPUlyssesShardingManager
+
+
+def _resolve_attn_implementation(padding_free: bool) -> str:
+    override = os.getenv("VERL_ATTN_IMPLEMENTATION")
+    if override:
+        return override
+
+    if padding_free:
+        if importlib.util.find_spec("flash_attn") is None:
+            raise RuntimeError(
+                "padding_free=True requires flash-attn. Install flash-attn or set "
+                "worker.actor.padding_free=false in the RL config."
+            )
+        return "flash_attention_2"
+
+    return "sdpa"
 
 
 class FSDPWorker(Worker):
@@ -193,12 +211,14 @@ class FSDPWorker(Worker):
         else:
             auto_class = AutoModelForCausalLM
 
+        attn_implementation = _resolve_attn_implementation(padding_free)
+
         if (not fsdp_config.enable_rank0_init) or self.device_mesh.get_local_rank("fsdp") == 0:
             model = auto_class.from_pretrained(
                 model_config.model_path,
                 config=self.model_config,
                 torch_dtype=torch_dtype,
-                attn_implementation="flash_attention_2",
+                attn_implementation=attn_implementation,
                 device_map="cpu" if fsdp_config.enable_rank0_init else "cuda",
                 low_cpu_mem_usage=True,
                 trust_remote_code=model_config.trust_remote_code,
@@ -208,7 +228,7 @@ class FSDPWorker(Worker):
                 model = auto_class.from_config(
                     self.model_config,
                     torch_dtype=torch_dtype,
-                    attn_implementation="flash_attention_2",
+                    attn_implementation=attn_implementation,
                     trust_remote_code=model_config.trust_remote_code,
                 )
 
@@ -459,6 +479,45 @@ class FSDPWorker(Worker):
             metrics["actor/lr"] = lr
 
             # Metrics should be in non_tensor_batch instead of meta_info, as DataProto not concat meta_info.
+            output = DataProto(
+                non_tensor_batch={
+                    key: np.array([value] if np.isscalar(value) else value) for key, value in metrics.items()
+                }
+            )
+
+        if self._use_param_offload:
+            offload_fsdp_model(self.fsdp_module)
+
+        if self._use_optimizer_offload:
+            offload_fsdp_optimizer(optimizer=self.optimizer)
+
+        output = output.to("cpu")
+        return output
+
+    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
+    def update_actor_supervised(self, data: DataProto):
+        assert self._is_actor
+        data = data.to(torch.cuda.current_device())
+
+        if self._use_param_offload:
+            load_fsdp_model(self.fsdp_module)
+
+        if self._use_optimizer_offload:
+            load_fsdp_optimizer(optimizer=self.optimizer)
+
+        with self.ulysses_sharding_manager:
+            data = self.ulysses_sharding_manager.preprocess_data(data=data)
+            with Timer(name="update_supervised", logger=None) as timer:
+                metrics = self.actor.update_supervised(data=data)
+
+            delta_time = timer.last
+            global_num_tokens = data.meta_info.get("global_token_num", [])
+            estimated_flops, promised_flops = self.flops_counter.estimate_flops(global_num_tokens, delta_time)
+            metrics["perf/mfu_actor_aux"] = estimated_flops / max(promised_flops * self.world_size, 1e-8)
+            metrics["perf/max_memory_allocated_gb_aux"] = (
+                torch.cuda.max_memory_allocated() - self.rollout_sharding_manager.freed_bytes
+            ) / (1024**3)
+
             output = DataProto(
                 non_tensor_batch={
                     key: np.array([value] if np.isscalar(value) else value) for key, value in metrics.items()
