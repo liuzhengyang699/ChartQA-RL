@@ -14,6 +14,10 @@ from tqdm import tqdm
 from .common import CHARTQA_RL_FIELD_NAMES
 
 
+CHARTQA_DATASET_PREFIX = "ChartQA/ChartQA Dataset/"
+LEGACY_FIGURE_PREFIX = "data/ChartQA/"
+
+
 def build_bbox_map(values: Any, bboxes: Any) -> dict[str, Any]:
     if isinstance(bboxes, dict):
         return bboxes or {"x1": "none"}
@@ -36,13 +40,22 @@ def normalize_chart_type(source: str | None) -> str | None:
 def to_figure_path(image_path: str | None) -> str | None:
     if not image_path:
         return None
-    if image_path.startswith("data/ChartQA/"):
-        return image_path
-    marker = "ChartQA/ChartQA Dataset/"
-    if marker in image_path:
-        suffix = image_path.split(marker, 1)[1]
-        return f"data/ChartQA/{suffix}"
-    return image_path
+    normalized = image_path.replace("\\", "/").strip()
+    if not normalized:
+        return None
+    if normalized.startswith(CHARTQA_DATASET_PREFIX):
+        return normalized
+    if normalized.startswith(LEGACY_FIGURE_PREFIX):
+        suffix = normalized[len(LEGACY_FIGURE_PREFIX) :]
+        return f"{CHARTQA_DATASET_PREFIX}{suffix}"
+    if CHARTQA_DATASET_PREFIX in normalized:
+        suffix = normalized.split(CHARTQA_DATASET_PREFIX, 1)[1]
+        return f"{CHARTQA_DATASET_PREFIX}{suffix}"
+    for split in ("train", "val", "test"):
+        split_prefix = f"{split}/"
+        if normalized.startswith(split_prefix):
+            return f"{CHARTQA_DATASET_PREFIX}{normalized}"
+    return normalized
 
 
 def resolve_image_path(image_path: str | None, raw_dir: Path, extra_roots: Iterable[Path] = ()) -> Path:
@@ -53,9 +66,12 @@ def resolve_image_path(image_path: str | None, raw_dir: Path, extra_roots: Itera
 
     figure_path = to_figure_path(image_path)
     if figure_path:
-        raw_relative = figure_path[len("data/") :] if figure_path.startswith("data/") else figure_path
-        candidates.extend([raw_dir / raw_relative, Path(figure_path)])
+        candidates.extend([raw_dir / figure_path, Path(figure_path)])
         candidates.extend(root / figure_path for root in extra_roots)
+        if figure_path.startswith(CHARTQA_DATASET_PREFIX):
+            legacy_path = f"{LEGACY_FIGURE_PREFIX}{figure_path[len(CHARTQA_DATASET_PREFIX):]}"
+            candidates.extend([raw_dir / legacy_path, Path(legacy_path)])
+            candidates.extend(root / legacy_path for root in extra_roots)
 
     for candidate in candidates:
         if candidate.exists():

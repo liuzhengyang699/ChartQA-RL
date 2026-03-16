@@ -18,10 +18,12 @@ This trainer supports model-agonistic model initialization with huggingface
 
 import os
 import uuid
+import importlib.util
 from collections import defaultdict
 from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum, IntEnum, auto
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Type
 import math
 import json
@@ -63,6 +65,52 @@ from .replay_buffer import ReplayBuffer
 
 import sys
 import traceback
+
+
+def _load_rl_raw_dir(repo_root: Path) -> Optional[str]:
+    for env_var in ("CHARTQA_RL_RAW_DIR", "CHARTQA_RAW_DIR"):
+        override = os.getenv(env_var)
+        if override:
+            return str(Path(override).expanduser().resolve())
+
+    config_module_path = repo_root / "LoRA" / "utils" / "config.py"
+    if not config_module_path.exists():
+        return None
+
+    spec = importlib.util.spec_from_file_location("chartqa_lora_config", config_module_path)
+    if spec is None or spec.loader is None:
+        return None
+
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+        path_config, _ = module.load_path_config()
+        return str(module.get_path_setting(path_config, "rl_raw_dir"))
+    except Exception:
+        return None
+
+
+def _figure_path_variants(figure_path: str) -> List[str]:
+    normalized = figure_path.replace("\\", "/").strip()
+    variants: List[str] = []
+
+    def add(value: str) -> None:
+        if value and value not in variants:
+            variants.append(value)
+
+    add(normalized)
+    if normalized.startswith("data/ChartQA/"):
+        suffix = normalized[len("data/ChartQA/") :]
+        add(f"ChartQA/ChartQA Dataset/{suffix}")
+    if "ChartQA/ChartQA Dataset/" in normalized:
+        suffix = normalized.split("ChartQA/ChartQA Dataset/", 1)[1]
+        add(f"ChartQA/ChartQA Dataset/{suffix}")
+    for split in ("train", "val", "test"):
+        split_prefix = f"{split}/"
+        if normalized.startswith(split_prefix):
+            add(f"ChartQA/ChartQA Dataset/{normalized}")
+            break
+    return variants
 
 class Role(IntEnum):
     """
@@ -224,7 +272,8 @@ class RayPPOTrainer:
 
         sys.unraisablehook = custom_unraisablehook
 
-        self._project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        self._project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+        self._rl_raw_dir = _load_rl_raw_dir(Path(self._project_root))
 
         self._trace_enable = bool(getattr(config.trainer, "trace", None) and config.trainer.trace.enable)
         self._trace_dir = None
@@ -480,17 +529,22 @@ class RayPPOTrainer:
         batch.non_tensor_batch["image_1_pil"] = np.array(image_1_pil, dtype=object)
 
     def _resolve_figure_path(self, figure_path: str) -> str:
-        candidates = []
+        candidates: List[str] = []
         if os.path.isabs(figure_path):
             candidates.append(figure_path)
         else:
-            candidates.extend(
-                [
-                    figure_path,
-                    os.path.join(os.getcwd(), figure_path),
-                    os.path.join(self._project_root, figure_path),
-                ]
-            )
+            for variant in _figure_path_variants(figure_path):
+                if self._rl_raw_dir:
+                    candidates.append(os.path.join(self._rl_raw_dir, variant))
+                    if variant.startswith("data/"):
+                        candidates.append(os.path.join(self._rl_raw_dir, variant[len("data/") :]))
+                candidates.extend(
+                    [
+                        variant,
+                        os.path.join(os.getcwd(), variant),
+                        os.path.join(self._project_root, variant),
+                    ]
+                )
         for candidate in candidates:
             if os.path.exists(candidate):
                 return candidate

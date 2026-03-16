@@ -113,7 +113,7 @@ trainer:
     max_steps: 200
   replay:
     enable: true
-    buffer_dir: null
+    buffer_dir: null  # set by RL/train.sh to rl_parquet_dir/replay unless REPLAY_BUFFER_DIR is provided
     buffer_size: 50000
     min_final_mix: 0.8
     min_tool_gain: 0.1

@@ -26,6 +26,8 @@ print(get_path_setting(path_config, "sft_merged_dir"))
 print(Path(rl_parquet_dir) / "train_full.parquet")
 print(Path(rl_parquet_dir) / "val_full.parquet")
 print(get_path_setting(path_config, "rl_checkpoint_dir"))
+print(Path(rl_parquet_dir) / "replay")
+print(get_path_setting(path_config, "rl_raw_dir"))
 PY
 )
 
@@ -34,6 +36,7 @@ MODEL_PATH="${MODEL_PATH:-${PATH_VALUES[0]}}"
 TRAIN_FILE="${TRAIN_FILE:-${PATH_VALUES[1]}}"
 VAL_FILE="${VAL_FILE:-${PATH_VALUES[2]}}"
 CHECKPOINT_DIR="${CHECKPOINT_DIR:-${PATH_VALUES[3]}}"
+REPLAY_BUFFER_DIR="${REPLAY_BUFFER_DIR:-${PATH_VALUES[4]}}"
 EXPERIMENT_NAME="${EXPERIMENT_NAME:-qwen3vl4b_chartqa_rl}"
 PROJECT_NAME="${PROJECT_NAME:-chartqa_rl}"
 N_GPUS_PER_NODE="${N_GPUS_PER_NODE:-1}"
@@ -44,12 +47,16 @@ ROLLOUT_BATCH_SIZE="${ROLLOUT_BATCH_SIZE:-16}"
 VAL_BATCH_SIZE="${VAL_BATCH_SIZE:-256}"
 REWARD_TYPE="${REWARD_TYPE:-structured_chartqa}"
 REWARD_FUNCTION="${REWARD_FUNCTION:-./examples/reward_function/structured_chartqa.py:compute_structured_scores}"
+RAW_IMAGE_DIR="${CHARTQA_RL_RAW_DIR:-${CHARTQA_RAW_DIR:-${PATH_VALUES[5]}}}"
 
 if [ ! -d "${MODEL_PATH}" ]; then
     echo "Model path does not exist: ${MODEL_PATH}" >&2
     echo "Run LoRA/merge_lora.py first or override MODEL_PATH." >&2
     exit 1
 fi
+
+export CHARTQA_RL_RAW_DIR="${RAW_IMAGE_DIR}"
+export CHARTQA_RAW_DIR="${RAW_IMAGE_DIR}"
 
 python3 -m verl.trainer.main \
     config="${CONFIG_PATH}" \
@@ -65,5 +72,6 @@ python3 -m verl.trainer.main \
     data.rollout_batch_size="${ROLLOUT_BATCH_SIZE}" \
     data.val_batch_size="${VAL_BATCH_SIZE}" \
     trainer.save_checkpoint_path="${CHECKPOINT_DIR}" \
+    trainer.replay.buffer_dir="${REPLAY_BUFFER_DIR}" \
     worker.reward.reward_type="${REWARD_TYPE}" \
     worker.reward.reward_function="${REWARD_FUNCTION}"

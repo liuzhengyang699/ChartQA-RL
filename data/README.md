@@ -15,6 +15,7 @@
 
 - LoRA 和 RL 共用的是底层 ChartQA 数据层，不是完全相同的 prompt 或样本格式。
 - 运行时真实模型、原始数据、缓存和输出目录仍由 `config/paths.json` 控制。
+- `rl_parquet_dir` 默认不仅包含 `train_full.parquet` / `val_full.parquet`，还会在训练时生成 `replay/` 目录保存高质量 rollout 样本池。
 - RL 预处理的 canonical 入口现在是：
 
 ```bash
