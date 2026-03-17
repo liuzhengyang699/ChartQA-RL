@@ -91,10 +91,6 @@ def create_dataloader(config: DataConfig, tokenizer: PreTrainedTokenizer, proces
     print(len(train_dataset))
     print(len(val_dataset))
 
-
-    print(f"TRAIN SIZE: {len(train_dataloader)}")
-    print(f"VAL SIZE: {len(val_dataloader)}")
-
     assert len(train_dataloader) >= 1
     assert len(val_dataloader) >= 1
     print(f"Size of train dataloader: {len(train_dataloader)}")

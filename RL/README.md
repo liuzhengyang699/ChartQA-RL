@@ -128,6 +128,26 @@ cp RL/judge/judge_info.example.json RL/judge/judge_info.json
 bash RL/train.sh
 ```
 
+如果要把训练过程记录到 SwanLab 云端，先准备环境变量：
+
+```bash
+export SWANLAB_API_KEY=your_api_key
+export SWANLAB_LOG_DIR=/abs/path/to/swanlab_logs  # 可选
+```
+
+三个常用训练模式：
+
+```bash
+# 默认 structured tool RL，train.sh 默认启用 console+swanlab logger
+bash RL/train.sh
+
+# no_kl: 关闭 reference-policy KL 约束
+DISABLE_KL=1 USE_KL_LOSS=0 bash RL/train.sh
+
+# no_tool: 保留 structured action 生成，但不执行工具增强分支
+ENABLE_TOOL_BRANCH=0 bash RL/train.sh
+```
+
 常用覆盖项示例：
 
 ```bash
@@ -142,6 +162,17 @@ ROLLOUT_BATCH_SIZE=16 \
 bash RL/train.sh
 ```
 
+额外实验开关：
+
+```bash
+LOGGERS=console,swanlab \
+KL_COEF=0.005 \
+ENABLE_TOOL_BRANCH=1 \
+DISABLE_KL=0 \
+USE_KL_LOSS=1 \
+bash RL/train.sh
+```
+
 `RL/train.sh` 会默认做这些事情：
 
 - 从 `sft_merged_dir` 读取初始化模型
@@ -150,6 +181,7 @@ bash RL/train.sh
 - 将 replay buffer 写入 `rl_parquet_dir/replay`
 - 使用 `structured_chartqa` reward
 - 使用 `examples/config.yaml` 中的 structured action 配置
+- 默认导出 `SWANLAB_MODE=cloud`，并优先读取 `SWANLAB_LOG_DIR`
 
 ## 结构化动作空间
 

@@ -92,6 +92,14 @@ bash LoRA/download_data.sh
 python LoRA/chartqa_sft.py --config LoRA/configs/chartqa_qwen3vl4b.json
 ```
 
+如果希望把训练记录到 SwanLab 云端，推荐直接使用统一环境变量：
+
+```bash
+export SWANLAB_API_KEY=your_api_key
+export SWANLAB_LOG_DIR=/abs/path/to/swanlab_logs  # 可选
+python LoRA/chartqa_sft.py --config LoRA/configs/chartqa_qwen3vl4b.json
+```
+
 常见覆盖项示例：
 
 ```bash

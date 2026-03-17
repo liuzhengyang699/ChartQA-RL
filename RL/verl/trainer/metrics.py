@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Sequence
 
 import numpy as np
 import torch
@@ -22,6 +22,59 @@ from ..protocol import DataProto
 
 def reduce_metrics(metrics: Dict[str, List[Any]]) -> Dict[str, Any]:
     return {key: np.mean(value) for key, value in metrics.items()}
+
+
+def _safe_mean(values: Sequence[float]) -> float:
+    values = list(values)
+    return float(np.mean(values)) if values else 0.0
+
+
+def compute_structured_metrics(
+    reward_metrics: Dict[str, Sequence[float]],
+    action_valid: Sequence[bool],
+    tool_requested: Sequence[bool],
+    tool_exec_success: Sequence[bool],
+    invalid_action: Sequence[bool],
+    prefix: str,
+) -> Dict[str, float]:
+    action_valid_arr = np.asarray(action_valid, dtype=bool)
+    tool_requested_arr = np.asarray(tool_requested, dtype=bool)
+    tool_exec_success_arr = np.asarray(tool_exec_success, dtype=bool)
+    invalid_action_arr = np.asarray(invalid_action, dtype=bool)
+
+    total = float(max(len(action_valid_arr), 1))
+    tool_legal = float(np.sum(action_valid_arr & tool_requested_arr))
+    tool_exec_success_count = float(np.sum(tool_exec_success_arr))
+    executed_indices = np.flatnonzero(tool_exec_success_arr)
+
+    tool_gain_values = reward_metrics.get("tool_gain", [])
+    effective_tool_values = reward_metrics.get("effective_tool", [])
+    avg_tool_gain = (
+        float(np.mean([tool_gain_values[index] for index in executed_indices])) if len(executed_indices) > 0 else 0.0
+    )
+    tool_effectiveness = (
+        float(np.mean([effective_tool_values[index] for index in executed_indices]))
+        if len(executed_indices) > 0 and len(effective_tool_values) > 0
+        else 0.0
+    )
+
+    metrics = {
+        f"{prefix}/QAAccuracy": _safe_mean(reward_metrics.get("answer_accuracy", [])),
+        f"{prefix}/ToolCallRate": float(np.sum(tool_requested_arr)) / total,
+        f"{prefix}/LegalActionRate": float(np.sum(action_valid_arr)) / total,
+        f"{prefix}/ToolExecSuccessRate": tool_exec_success_count / max(tool_legal, 1.0),
+        f"{prefix}/ToolEffectivenessRate": tool_effectiveness,
+        f"{prefix}/AvgToolGain": avg_tool_gain,
+        f"{prefix}/InvalidActionRate": float(np.sum(invalid_action_arr)) / total,
+        f"{prefix}/FinalMix": _safe_mean(reward_metrics.get("final_mix", [])),
+        f"{prefix}/BaselineMix": _safe_mean(reward_metrics.get("baseline_mix", [])),
+        f"{prefix}/RuleScore": _safe_mean(reward_metrics.get("rule_score", [])),
+        f"{prefix}/JudgeScore": _safe_mean(reward_metrics.get("judge_score", [])),
+        f"{prefix}/BaselineRuleScore": _safe_mean(reward_metrics.get("baseline_rule_score", [])),
+        f"{prefix}/BaselineJudgeScore": _safe_mean(reward_metrics.get("baseline_judge_score", [])),
+        f"{prefix}/RewardScore": _safe_mean(reward_metrics.get("overall", [])),
+    }
+    return metrics
 
 
 def compute_data_metrics(batch: DataProto, use_critic: bool = False) -> Dict[str, Any]:

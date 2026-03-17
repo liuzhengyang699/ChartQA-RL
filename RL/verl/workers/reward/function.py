@@ -128,8 +128,6 @@ class BatchFunctionRewardManager(FunctionRewardManager):
 class LLMBatchFunctionRewardManager(FunctionRewardManager):
     reward_fn: LLMBatchRewardFunction
 
-    #we modify this now!!!
-
     def compute_reward(self, data: DataProto) -> Tuple[torch.Tensor, Dict[str, List[float]]]:
         response_str, ground_truth = [], []
         queries, penalties = [], []
@@ -158,8 +156,6 @@ class LLMBatchFunctionRewardManager(FunctionRewardManager):
 
 class LLMDoubleBatchFunctionRewardManager(FunctionRewardManager):
     reward_fn: LLMDoubleBatchRewardFunction
-
-    #we modify this now!!!
 
     def compute_reward(self, data: DataProto) -> Tuple[torch.Tensor, Dict[str, List[float]]]:
         response_str, ground_truth = [], []

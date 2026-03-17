@@ -96,10 +96,14 @@ class WandbLogger(Logger):
         wandb.finish()
 
 
+def resolve_swanlab_log_dir() -> str:
+    return os.getenv("SWANLAB_LOG_DIR") or os.getenv("SWANLAB_DIR", "swanlab_log")
+
+
 class SwanlabLogger(Logger):
     def __init__(self, config: Dict[str, Any]) -> None:
         swanlab_key = os.getenv("SWANLAB_API_KEY")
-        swanlab_dir = os.getenv("SWANLAB_DIR", "swanlab_log")
+        swanlab_dir = resolve_swanlab_log_dir()
         swanlab_mode = os.getenv("SWANLAB_MODE", "cloud")
         if swanlab_key:
             swanlab.login(swanlab_key)
@@ -134,6 +138,7 @@ class Tracker:
             loggers = [loggers]
 
         self.loggers: List[Logger] = []
+        self._finished = False
         for logger in loggers:
             if logger not in LOGGERS:
                 raise ValueError(f"{logger} is not supported.")
@@ -149,6 +154,15 @@ class Tracker:
     def log_generation(self, samples: List[Tuple[str, str, str, float]], step: int) -> None:
         self.gen_logger.log(samples, step)
 
-    def __del__(self):
+    def finish(self) -> None:
+        if self._finished:
+            return
+        self._finished = True
         for logger in self.loggers:
             logger.finish()
+
+    def __del__(self):
+        try:
+            self.finish()
+        except Exception:
+            pass

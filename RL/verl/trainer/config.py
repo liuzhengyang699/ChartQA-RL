@@ -64,7 +64,7 @@ class AlgorithmConfig:
     lam: float = 1.0
     adv_estimator: str = "grpo"
     action_mode: str = "structured"
-    run_baseline_branch: bool = True
+    enable_tool_branch: bool = True
     disable_kl: bool = False
     use_kl_loss: bool = False
     kl_penalty: str = "kl"

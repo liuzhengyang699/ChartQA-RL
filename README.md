@@ -100,6 +100,7 @@ python LoRA/chartqa_eval.py --config LoRA/configs/chartqa_qwen3vl4b.json
 ```bash
 bash data/rl/preprocess_data.sh
 cp RL/judge/judge_info.example.json RL/judge/judge_info.json
+export SWANLAB_API_KEY=your_api_key
 bash RL/train.sh
 python RL/evaluate_structured.py --model_path /abs/path/to/model_or_actor
 ```
@@ -113,4 +114,11 @@ VAL_FILE=/abs/path/to/val_full.parquet \
 CHECKPOINT_DIR=/abs/path/to/rl_checkpoints \
 REPLAY_BUFFER_DIR=/abs/path/to/replay_buffer \
 bash RL/train.sh
+```
+
+常见对比实验：
+
+```bash
+DISABLE_KL=1 USE_KL_LOSS=0 bash RL/train.sh
+ENABLE_TOOL_BRANCH=0 bash RL/train.sh
 ```

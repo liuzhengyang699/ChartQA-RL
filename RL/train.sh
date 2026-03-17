@@ -37,17 +37,8 @@ TRAIN_FILE="${TRAIN_FILE:-${PATH_VALUES[1]}}"
 VAL_FILE="${VAL_FILE:-${PATH_VALUES[2]}}"
 CHECKPOINT_DIR="${CHECKPOINT_DIR:-${PATH_VALUES[3]}}"
 REPLAY_BUFFER_DIR="${REPLAY_BUFFER_DIR:-${PATH_VALUES[4]}}"
-EXPERIMENT_NAME="${EXPERIMENT_NAME:-qwen3vl4b_chartqa_rl}"
-PROJECT_NAME="${PROJECT_NAME:-chartqa_rl}"
-N_GPUS_PER_NODE="${N_GPUS_PER_NODE:-1}"
-TP_SIZE="${TP_SIZE:-1}"
-GLOBAL_BATCH_SIZE="${GLOBAL_BATCH_SIZE:-8}"
-MICRO_BATCH_SIZE="${MICRO_BATCH_SIZE:-2}"
-ROLLOUT_BATCH_SIZE="${ROLLOUT_BATCH_SIZE:-16}"
-VAL_BATCH_SIZE="${VAL_BATCH_SIZE:-256}"
-REWARD_TYPE="${REWARD_TYPE:-structured_chartqa}"
-REWARD_FUNCTION="${REWARD_FUNCTION:-./examples/reward_function/structured_chartqa.py:compute_structured_scores}"
 RAW_IMAGE_DIR="${CHARTQA_RL_RAW_DIR:-${CHARTQA_RAW_DIR:-${PATH_VALUES[5]}}}"
+LOGGERS="${LOGGERS:-console,swanlab}"
 
 if [ ! -d "${MODEL_PATH}" ]; then
     echo "Model path does not exist: ${MODEL_PATH}" >&2
@@ -57,21 +48,78 @@ fi
 
 export CHARTQA_RL_RAW_DIR="${RAW_IMAGE_DIR}"
 export CHARTQA_RAW_DIR="${RAW_IMAGE_DIR}"
+export SWANLAB_MODE="${SWANLAB_MODE:-cloud}"
 
-python3 -m verl.trainer.main \
-    config="${CONFIG_PATH}" \
-    data.train_files="${TRAIN_FILE}" \
-    data.val_files="${VAL_FILE}" \
-    worker.actor.model.model_path="${MODEL_PATH}" \
-    worker.rollout.tensor_parallel_size="${TP_SIZE}" \
-    trainer.project_name="${PROJECT_NAME}" \
-    trainer.experiment_name="${EXPERIMENT_NAME}" \
-    trainer.n_gpus_per_node="${N_GPUS_PER_NODE}" \
-    worker.actor.global_batch_size="${GLOBAL_BATCH_SIZE}" \
-    worker.actor.micro_batch_size_per_device_for_update="${MICRO_BATCH_SIZE}" \
-    data.rollout_batch_size="${ROLLOUT_BATCH_SIZE}" \
-    data.val_batch_size="${VAL_BATCH_SIZE}" \
-    trainer.save_checkpoint_path="${CHECKPOINT_DIR}" \
-    trainer.replay.buffer_dir="${REPLAY_BUFFER_DIR}" \
-    worker.reward.reward_type="${REWARD_TYPE}" \
-    worker.reward.reward_function="${REWARD_FUNCTION}"
+if [ -n "${SWANLAB_API_KEY:-}" ]; then
+    export SWANLAB_API_KEY
+fi
+if [ -n "${SWANLAB_LOG_DIR:-}" ]; then
+    export SWANLAB_LOG_DIR
+fi
+
+CMD=(
+    python3 -m verl.trainer.main
+    "config=${CONFIG_PATH}"
+    "data.train_files=${TRAIN_FILE}"
+    "data.val_files=${VAL_FILE}"
+    "worker.actor.model.model_path=${MODEL_PATH}"
+    "trainer.save_checkpoint_path=${CHECKPOINT_DIR}"
+    "trainer.replay.buffer_dir=${REPLAY_BUFFER_DIR}"
+)
+
+normalize_bool() {
+    local value="${1,,}"
+    case "${value}" in
+        1|true|yes|on)
+            echo "true"
+            ;;
+        0|false|no|off)
+            echo "false"
+            ;;
+        *)
+            echo "${1}"
+            ;;
+    esac
+}
+
+append_override() {
+    local env_name="$1"
+    local config_key="$2"
+    local value="${!env_name:-}"
+    if [ -n "${value}" ]; then
+        CMD+=("${config_key}=${value}")
+    fi
+}
+
+append_bool_override() {
+    local env_name="$1"
+    local config_key="$2"
+    local value="${!env_name:-}"
+    if [ -n "${value}" ]; then
+        CMD+=("${config_key}=$(normalize_bool "${value}")")
+    fi
+}
+
+# Respect config.yaml by default; only override when the user explicitly
+# provides environment variables.
+LOGGERS="${LOGGERS// /}"
+if [ -n "${LOGGERS}" ]; then
+    CMD+=("trainer.logger=[${LOGGERS}]")
+fi
+
+append_override PROJECT_NAME trainer.project_name
+append_override EXPERIMENT_NAME trainer.experiment_name
+append_override N_GPUS_PER_NODE trainer.n_gpus_per_node
+append_override TP_SIZE worker.rollout.tensor_parallel_size
+append_override GLOBAL_BATCH_SIZE worker.actor.global_batch_size
+append_override MICRO_BATCH_SIZE worker.actor.micro_batch_size_per_device_for_update
+append_override ROLLOUT_BATCH_SIZE data.rollout_batch_size
+append_override VAL_BATCH_SIZE data.val_batch_size
+append_override REWARD_TYPE worker.reward.reward_type
+append_override REWARD_FUNCTION worker.reward.reward_function
+append_override KL_COEF algorithm.kl_coef
+append_bool_override ENABLE_TOOL_BRANCH algorithm.enable_tool_branch
+append_bool_override DISABLE_KL algorithm.disable_kl
+append_bool_override USE_KL_LOSS algorithm.use_kl_loss
+
+"${CMD[@]}"

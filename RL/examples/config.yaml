@@ -20,7 +20,7 @@ data:
 algorithm:
   adv_estimator: grpo  # current experiment algorithm; RayPPOTrainer is only the PPO-family trainer skeleton from VeRL
   action_mode: structured
-  run_baseline_branch: true
+  enable_tool_branch: true
   disable_kl: false
   use_kl_loss: true
   kl_penalty: low_var_kl
@@ -65,7 +65,7 @@ worker:
     gpu_memory_utilization: 0.4
     enforce_eager: false
     enable_chunked_prefill: false
-    tensor_parallel_size: 2
+    tensor_parallel_size: 4
     limit_images: 2
     val_override_config:
       temperature: 0.5
@@ -96,13 +96,13 @@ trainer:
   experiment_name: qwen3vl4b_chartqa_rl
   logger: ["console"]
   nnodes: 1
-  n_gpus_per_node: 1
-  val_freq: 2  # -1 to disable
+  n_gpus_per_node: 4
+  val_freq: 20  # -1 to disable
   val_before_train: true
   val_only: false
   val_generations_to_log: 3
-  save_freq: 5  # -1 to disable
-  save_limit: 20  # -1 to disable
+  save_freq: 100  # -1 to disable
+  save_limit: 2  # -1 to disable
   save_checkpoint_path: null  # set by RL/train.sh from config/paths.json unless CHECKPOINT_DIR is provided
   load_checkpoint_path: null
   trace:
