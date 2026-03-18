@@ -64,14 +64,10 @@ class FlopsCounter:
     def __init__(self, config: "LlamaConfig"):
         _ESTIMATE_FUNC = {
             "llama": self._estimate_llama_flops,
-            "qwen2": self._estimate_llama_flops,
-            "qwen2_moe": self._estimate_qwen2_moe_flops,
-            "qwen2_vl": self._estimate_llama_flops,
-            "qwen2_5_vl": self._estimate_llama_flops,
             "qwen3": self._estimate_llama_flops,
             "qwen3_vl": self._estimate_llama_flops,
-            "qwen3_moe": self._estimate_qwen2_moe_flops,
-            "qwen3_vl_moe": self._estimate_qwen2_moe_flops,
+            "qwen3_moe": self._estimate_sparse_qwen_flops,
+            "qwen3_vl_moe": self._estimate_sparse_qwen_flops,
         }
 
         if config.model_type not in _ESTIMATE_FUNC:
@@ -98,7 +94,7 @@ class FlopsCounter:
         v_size = num_key_value_heads * head_dim
 
         # non-attn per layer parm
-        # Qwen2/LLama use SwiGelu, gate, having up and down linear layer in mlp
+        # Qwen/Llama use SwiGLU, so the MLP has gate, up, and down projections.
         mlp_N = hidden_size * intermediate_size * 3
         attn_linear_N = hidden_size * (q_size + k_size + v_size + num_attention_heads * head_dim)
         emd_and_lm_head_N = vocab_size * hidden_size * 2
@@ -119,7 +115,7 @@ class FlopsCounter:
         flops_achieved = flops_all_token * (1.0 / delta_time) / 1e12
         return flops_achieved
 
-    def _estimate_qwen2_moe_flops(self, tokens_sum: int, batch_seqlens: List[int], delta_time: float) -> float:
+    def _estimate_sparse_qwen_flops(self, tokens_sum: int, batch_seqlens: List[int], delta_time: float) -> float:
         config = self.config
         hidden_size = config.hidden_size
         vocab_size = config.vocab_size

@@ -69,7 +69,7 @@ class DataParallelPPOActor(BasePPOActor):
         position_ids = micro_batch["position_ids"]
         responses = micro_batch["responses"]
         response_length = responses.size(-1)
-        if position_ids.dim() == 3:  # qwen2vl mrope
+        if position_ids.dim() == 3:  # Qwen3VL multimodal RoPE
             position_ids = position_ids.transpose(0, 1)  # (bsz, 3, seqlen) -> (3, bsz, seqlen)
 
         multi_modal_inputs = {}

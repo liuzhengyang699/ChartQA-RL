@@ -28,7 +28,7 @@ from PIL.Image import Image as ImageObject
 from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizer, ProcessorMixin
 
-from ..models.transformers.qwen2_vl import get_rope_index
+from ..models.transformers.qwen3_vl import ensure_qwen3_vl_processor, get_rope_index
 from . import torch_functional as VF
 
 
@@ -200,6 +200,23 @@ class RLHFDataset(Dataset, ImageProcessMixin):
     def __len__(self):
         return len(self.dataset)
 
+    def _build_position_ids(
+        self,
+        input_ids: torch.Tensor,
+        model_inputs: Dict[str, Any],
+        attention_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        if self.processor is None:
+            return torch.clip(attention_mask.cumsum(dim=0) - 1, min=0, max=None)
+        processor = ensure_qwen3_vl_processor(self.processor)
+        return get_rope_index(
+            processor,
+            input_ids=input_ids,
+            image_grid_thw=model_inputs.get("image_grid_thw"),
+            video_grid_thw=model_inputs.get("video_grid_thw"),
+            attention_mask=attention_mask,
+        )
+
     def __getitem__(self, index):
         example: dict = self.dataset[index]
         messages = self._build_messages(example)
@@ -224,16 +241,7 @@ class RLHFDataset(Dataset, ImageProcessMixin):
             input_ids = model_inputs.pop("input_ids")[0]
             attention_mask = model_inputs.pop("attention_mask")[0]
 
-        if self.processor is not None and self.processor.image_processor.__class__.__name__ == "Qwen2VLImageProcessor":
-            # qwen2vl mrope
-            position_ids = get_rope_index(
-                self.processor,
-                input_ids=input_ids,
-                image_grid_thw=model_inputs.get("image_grid_thw"),
-                attention_mask=attention_mask,
-            )  # (3, seq_length)
-        else:
-            position_ids = torch.clip(attention_mask.cumsum(dim=0) - 1, min=0, max=None)  # (seq_length,)
+        position_ids = self._build_position_ids(input_ids, model_inputs, attention_mask)
 
         input_ids, attention_mask, position_ids = VF.postprocess_data(
             input_ids=input_ids,

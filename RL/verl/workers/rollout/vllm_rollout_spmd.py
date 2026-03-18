@@ -163,7 +163,7 @@ class vLLMRollout(BaseRollout):
         response_length = response_ids.size(1)
         delta_position_id = torch.arange(1, response_length + 1, device=position_ids.device)
         delta_position_id = delta_position_id.view(1, -1).expand(batch_size, -1)
-        if position_ids.dim() == 3:  # qwen2vl mrope
+        if position_ids.dim() == 3:  # Qwen3VL multimodal RoPE
             delta_position_id = delta_position_id.view(batch_size, 1, -1).expand(batch_size, 3, -1)
 
         # prompt: left pad + response: right pad

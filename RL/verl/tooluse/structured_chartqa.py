@@ -6,7 +6,7 @@ from typing import Any, Callable, Dict, List, Optional
 import torch
 from PIL import Image
 
-from ..models.transformers.qwen2_vl import get_rope_index
+from ..models.transformers.qwen3_vl import ensure_qwen3_vl_processor, get_rope_index
 from ..utils import torch_functional as VF
 from .tools import (
     focus_on_x_values_with_draw,
@@ -316,6 +316,17 @@ def _prepare_images(images: List[Image.Image], process_image: Optional[Callable[
     return [process_image(image) for image in images]
 
 
+def _build_qwen3vl_position_ids(processor, input_ids: torch.Tensor, model_inputs: Dict[str, Any], attention_mask: torch.Tensor) -> torch.Tensor:
+    processor = ensure_qwen3_vl_processor(processor)
+    return get_rope_index(
+        processor,
+        input_ids=input_ids,
+        image_grid_thw=model_inputs.get("image_grid_thw"),
+        video_grid_thw=model_inputs.get("video_grid_thw"),
+        attention_mask=attention_mask,
+    )
+
+
 def build_generation_feature(
     processor,
     tokenizer,
@@ -331,16 +342,7 @@ def build_generation_feature(
     model_inputs = processor(processed_images, [prompt], add_special_tokens=False, return_tensors="pt")
     input_ids = model_inputs.pop("input_ids")[0]
     attention_mask = model_inputs.pop("attention_mask")[0]
-
-    if processor.image_processor.__class__.__name__ == "Qwen2VLImageProcessor":
-        position_ids = get_rope_index(
-            processor,
-            input_ids=input_ids,
-            image_grid_thw=model_inputs.get("image_grid_thw"),
-            attention_mask=attention_mask,
-        )
-    else:
-        position_ids = torch.clip(attention_mask.cumsum(dim=0) - 1, min=0, max=None)
+    position_ids = _build_qwen3vl_position_ids(processor, input_ids, model_inputs, attention_mask)
 
     input_ids, attention_mask, position_ids = VF.postprocess_data(
         input_ids=input_ids,
@@ -407,16 +409,7 @@ def build_supervised_feature(
     prompt_len = prompt_inputs["input_ids"].shape[1]
     input_ids = full_inputs.pop("input_ids")[0]
     attention_mask = full_inputs.pop("attention_mask")[0]
-
-    if processor.image_processor.__class__.__name__ == "Qwen2VLImageProcessor":
-        position_ids = get_rope_index(
-            processor,
-            input_ids=input_ids,
-            image_grid_thw=full_inputs.get("image_grid_thw"),
-            attention_mask=attention_mask,
-        )
-    else:
-        position_ids = torch.clip(attention_mask.cumsum(dim=0) - 1, min=0, max=None)
+    position_ids = _build_qwen3vl_position_ids(processor, input_ids, full_inputs, attention_mask)
 
     labels = input_ids.clone()
     labels[:prompt_len] = -100
