@@ -1,5 +1,3 @@
-import cv2, json
-import numpy as np
 from PIL import Image, ImageDraw
 
 

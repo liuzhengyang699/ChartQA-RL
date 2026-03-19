@@ -291,12 +291,22 @@ def build_baseline_answer_prompt(query: str) -> str:
 def build_tool_answer_prompt(query: str, action_result: Dict[str, Any]) -> str:
     targets = ", ".join(action_result.get("targets", []))
     return (
-        "You are given two images: the original chart and a tool-focused chart.\n"
+        "You are given a tool-focused chart image.\n"
         f"The tool-focused chart was created with {action_result['edit_mode']} on {action_result['chart_axis']}-values: {targets}.\n"
         f"Question: {query}\n"
-        "Use the focused chart when it helps, but stay faithful to the original chart.\n"
+        "Use the focused chart to answer the question.\n"
         "Reply with a short explanation and end with `FINAL ANSWER: <answer>`."
     )
+
+
+def build_tool_answer_request(query: str, action_result: Dict[str, Any]) -> Dict[str, Any]:
+    edited_image = action_result.get("edited_image")
+    if not isinstance(edited_image, Image.Image):
+        raise ValueError("tool answer request requires an edited image")
+    return {
+        "prompt_text": build_tool_answer_prompt(query, action_result),
+        "images": [edited_image.copy()],
+    }
 
 
 def build_generation_messages(prompt_text: str, image_count: int) -> List[Dict[str, Any]]:

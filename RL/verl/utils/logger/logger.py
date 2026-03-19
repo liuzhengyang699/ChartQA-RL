@@ -17,12 +17,11 @@ A unified tracking interface that supports logging data to different backend
 
 import os
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Union
 
 from torch.utils.tensorboard import SummaryWriter
 
 from ..py_functional import convert_dict_to_str, flatten_dict, is_package_available, unflatten_dict
-from .gen_logger import AggregateGenerationsLogger
 
 
 if is_package_available("mlflow"):
@@ -97,7 +96,7 @@ class WandbLogger(Logger):
 
 
 def resolve_swanlab_log_dir() -> str:
-    return os.getenv("SWANLAB_LOG_DIR") or os.getenv("SWANLAB_DIR", "swanlab_log")
+    return os.getenv("SWANLAB_LOG_DIR", "swanlab_log")
 
 
 class SwanlabLogger(Logger):
@@ -145,14 +144,9 @@ class Tracker:
 
             self.loggers.append(LOGGERS[logger](config))
 
-        self.gen_logger = AggregateGenerationsLogger(loggers)
-
     def log(self, data: Dict[str, Any], step: int) -> None:
         for logger in self.loggers:
             logger.log(data=data, step=step)
-
-    def log_generation(self, samples: List[Tuple[str, str, str, float]], step: int) -> None:
-        self.gen_logger.log(samples, step)
 
     def finish(self) -> None:
         if self._finished:

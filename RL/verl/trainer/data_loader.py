@@ -25,6 +25,11 @@ from .config import DataConfig
 
 def create_dataloader(config: DataConfig, tokenizer: PreTrainedTokenizer, processor: Optional[ProcessorMixin]) -> None:
     print("Creating Dataset...")
+    if not config.train_files or not config.val_files:
+        raise ValueError(
+            "Both data.train_files and data.val_files must be set before creating the RL dataloader. "
+            "Use RL/train.sh or pass them explicitly on the CLI."
+        )
 
     train_dataset = RLHFDataset(
         data_path=config.train_files,

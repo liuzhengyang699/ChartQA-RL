@@ -1,13 +1,8 @@
-name: chartqa-rl
+name: chartqa
 channels:
-  - pytorch
-  - nvidia
   - conda-forge
 dependencies:
   - python=3.10
   - pip
-  - pytorch=2.5.1
-  - torchvision=0.20.1
-  - pytorch-cuda=11.8
-  - pip:
-      - -r requirements.txt
+  - setuptools
+  - wheel

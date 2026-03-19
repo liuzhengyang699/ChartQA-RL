@@ -73,6 +73,18 @@ class OffloadConfig:
 
 
 @dataclass
+class RLLoRAConfig:
+    enable: bool = True
+    r: int = 8
+    alpha: int = 16
+    dropout: float = 0.05
+    target_modules: Tuple[str, ...] = ("q_proj", "k_proj", "v_proj", "o_proj")
+
+    def post_init(self):
+        self.target_modules = tuple(self.target_modules)
+
+
+@dataclass
 class ActorConfig:
     strategy: str = "fsdp"
     global_batch_size: int = 256
@@ -85,17 +97,22 @@ class ActorConfig:
     ppo_epochs: int = 1
     padding_free: bool = False
     ulysses_sequence_parallel_size: int = 1
-    use_torch_compile: bool = True
+    use_torch_compile: bool = False
     model: ModelConfig = field(default_factory=ModelConfig)
     optim: OptimConfig = field(default_factory=OptimConfig)
     fsdp: FSDPConfig = field(default_factory=FSDPConfig)
     offload: OffloadConfig = field(default_factory=OffloadConfig)
+    rl_lora: RLLoRAConfig = field(default_factory=RLLoRAConfig)
     """auto keys"""
     global_batch_size_per_device: int = field(default=-1, init=False)
     disable_kl: bool = field(default=False, init=False)
     use_kl_loss: bool = field(default=False, init=False)
     kl_penalty: str = field(default="kl", init=False)
     kl_coef: float = field(default=0.0, init=False)
+
+    def post_init(self):
+        if self.rl_lora.enable:
+            self.fsdp.use_orig_params = True
 
 
 @dataclass

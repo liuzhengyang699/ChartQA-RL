@@ -306,7 +306,7 @@ def make_delta_svg(summary: dict[str, Any], deltas: list[float]) -> str:
     zero_x = chart_left + (chart_width / 2.0)
     bin_width = chart_width / len(counts)
 
-    lines.append(f'<rect x="64" y="388" width="1152" height="312" rx="28" fill="white" fill-opacity="0.7"/>')
+    lines.append('<rect x="64" y="388" width="1152" height="312" rx="28" fill="white" fill-opacity="0.7"/>')
     lines.append(f'<line x1="{chart_left}" y1="{base_y}" x2="{chart_left + chart_width}" y2="{base_y}" stroke="#CBD5E1" stroke-width="2"/>')
     lines.append(f'<line x1="{zero_x:.1f}" y1="{chart_top - 12}" x2="{zero_x:.1f}" y2="{base_y}" stroke="#94A3B8" stroke-dasharray="8 8" stroke-width="2"/>')
 

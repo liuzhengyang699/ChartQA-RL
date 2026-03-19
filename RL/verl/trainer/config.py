@@ -33,8 +33,8 @@ def recursive_post_init(dataclass_obj):
 
 @dataclass
 class DataConfig:
-    train_files: str = ""
-    val_files: str = ""
+    train_files: Optional[str] = None
+    val_files: Optional[str] = None
     prompt_key: str = "prompt"
     answer_key: str = "answer"
     image_key: str = "images"
@@ -51,6 +51,10 @@ class DataConfig:
     filter_overlong_prompts: bool = True
 
     def post_init(self):
+        if self.train_files is not None:
+            self.train_files = os.path.abspath(self.train_files)
+        if self.val_files is not None:
+            self.val_files = os.path.abspath(self.val_files)
         if self.format_prompt is not None:
             if os.path.exists(self.format_prompt):  # ray job uses absolute path
                 self.format_prompt = os.path.abspath(self.format_prompt)
@@ -118,7 +122,6 @@ class TrainerConfig:
     val_freq: int = -1
     val_before_train: bool = True
     val_only: bool = False
-    val_generations_to_log: int = 0
     save_freq: int = -1
     save_limit: int = -1
     save_checkpoint_path: Optional[str] = None

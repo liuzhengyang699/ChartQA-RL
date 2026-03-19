@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from .checkpoint_manager import CHECKPOINT_TRACKER, remove_obsolete_ckpt
+from .fsdp_rl_lora_checkpoint_manager import FSDPRLLoRACheckpointManager
 
 
-__all__ = ["CHECKPOINT_TRACKER", "remove_obsolete_ckpt"]
+__all__ = ["CHECKPOINT_TRACKER", "FSDPRLLoRACheckpointManager", "remove_obsolete_ckpt"]

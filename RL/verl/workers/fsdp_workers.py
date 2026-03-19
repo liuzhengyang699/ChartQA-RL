@@ -20,11 +20,9 @@ import os
 from typing import Literal, Optional, Union
 
 import numpy as np
-import psutil
 import torch
 import torch.distributed as dist
 from accelerate import init_empty_weights
-from codetiming import Timer
 from torch.distributed.device_mesh import init_device_mesh
 from torch.distributed.fsdp import CPUOffload, MixedPrecision, ShardingStrategy
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
@@ -40,10 +38,11 @@ from transformers.modeling_utils import no_init_weights
 
 from ..models.monkey_patch import apply_ulysses_patch
 from ..protocol import DataProto
+from ..rl_lora import prepare_rl_lora_model
 from ..single_controller.base import Worker
 from ..single_controller.base.decorator import Dispatch, register
 from ..utils.checkpoint.fsdp_checkpoint_manager import FSDPCheckpointManager
-from ..utils.flops_counter import FlopsCounter
+from ..utils.checkpoint.fsdp_rl_lora_checkpoint_manager import FSDPRLLoRACheckpointManager
 from ..utils.fsdp_utils import (
     get_fsdp_wrap_policy,
     get_init_fn,
@@ -99,6 +98,7 @@ class FSDPWorker(Worker):
         self._is_critic = self.role == "critic"
         self._is_rollout = self.role in ["rollout", "actor_rollout", "actor_rollout_ref"]
         self._is_ref = self.role in ["ref", "actor_rollout_ref"]
+        self._rl_lora_enabled = bool(self._is_actor and self.config.actor.rl_lora.enable)
 
         self._use_param_offload = False
         self._use_optimizer_offload = False
@@ -168,6 +168,7 @@ class FSDPWorker(Worker):
         fsdp_config: FSDPConfig,
         optim_config: Optional[OptimConfig],
         padding_free: bool = False,
+        rl_lora_config=None,
     ) -> None:
         self.tokenizer = get_tokenizer(
             model_config.tokenizer_path,
@@ -248,6 +249,15 @@ class FSDPWorker(Worker):
                 self.print_rank0("Vision tower is set to not trainable.")
             else:
                 self.print_rank0("No vision tower found.")
+
+        if self._is_actor and rl_lora_config is not None and rl_lora_config.enable:
+            fsdp_config.use_orig_params = True
+            model = prepare_rl_lora_model(model, rl_lora_config, model_config.model_path)
+            self.print_rank0(
+                "RL LoRA enabled with "
+                f"r={rl_lora_config.r}, alpha={rl_lora_config.alpha}, "
+                f"dropout={rl_lora_config.dropout}, target_modules={list(rl_lora_config.target_modules)}."
+            )
 
         dist.barrier()
         print_model_size(model)
@@ -341,6 +351,7 @@ class FSDPWorker(Worker):
             module=self.fsdp_module,
             inference_engine=self.rollout.inference_engine,
             device_mesh=rollout_device_mesh,
+            rl_lora_config=self.config.actor.rl_lora,
         )
         print_gpu_memory_usage("After vllm init")
 
@@ -358,12 +369,14 @@ class FSDPWorker(Worker):
             optim_config = self.config.actor.optim
             padding_free = self.config.actor.padding_free
             role = "actor"
+            rl_lora_config = self.config.actor.rl_lora
         elif self._is_ref:
             model_config = self.config.actor.model
             fsdp_config = self.config.ref.fsdp
             optim_config = None
             padding_free = self.config.ref.padding_free
             role = "ref"
+            rl_lora_config = None
         else:
             raise ValueError(f"Unknown role {role}.")
 
@@ -373,6 +386,7 @@ class FSDPWorker(Worker):
                 fsdp_config=fsdp_config,
                 optim_config=optim_config,
                 padding_free=padding_free,
+                rl_lora_config=rl_lora_config if self._is_actor else None,
             )
             if self._use_param_offload:
                 offload_fsdp_model(self.fsdp_module)
@@ -412,13 +426,22 @@ class FSDPWorker(Worker):
             )
 
         if self._is_actor or self._is_critic:
-            self.flops_counter = FlopsCounter(self.model_config)
-            self.checkpoint_manager = FSDPCheckpointManager(
-                model=self.fsdp_module,
-                optimizer=self.optimizer,
-                lr_scheduler=self.lr_scheduler,
-                processing_class=self.processor if self.processor is not None else self.tokenizer,
-            )
+            if self._is_actor and self.config.actor.rl_lora.enable:
+                self.checkpoint_manager = FSDPRLLoRACheckpointManager(
+                    model=self.fsdp_module,
+                    optimizer=self.optimizer,
+                    lr_scheduler=self.lr_scheduler,
+                    processing_class=self.processor if self.processor is not None else self.tokenizer,
+                    base_model_path=self.config.actor.model.model_path,
+                    rl_lora_config=self.config.actor.rl_lora,
+                )
+            else:
+                self.checkpoint_manager = FSDPCheckpointManager(
+                    model=self.fsdp_module,
+                    optimizer=self.optimizer,
+                    lr_scheduler=self.lr_scheduler,
+                    processing_class=self.processor if self.processor is not None else self.tokenizer,
+                )
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def save_checkpoint(self, path: str):
@@ -457,22 +480,7 @@ class FSDPWorker(Worker):
 
         with self.ulysses_sharding_manager:
             data = self.ulysses_sharding_manager.preprocess_data(data=data)
-            with Timer(name="update_policy", logger=None) as timer:
-                metrics = self.actor.update_policy(data=data)
-
-            delta_time = timer.last
-            global_num_tokens = data.meta_info["global_token_num"]
-            estimated_flops, promised_flops = self.flops_counter.estimate_flops(global_num_tokens, delta_time)
-            metrics["perf/mfu_actor"] = (
-                estimated_flops * self.config.actor.ppo_epochs / (promised_flops * self.world_size)
-            )
-            metrics["perf/max_memory_allocated_gb"] = (
-                torch.cuda.max_memory_allocated() - self.rollout_sharding_manager.freed_bytes
-            ) / (1024**3)
-            metrics["perf/max_memory_reserved_gb"] = (
-                torch.cuda.max_memory_reserved() - self.rollout_sharding_manager.freed_bytes
-            ) / (1024**3)
-            metrics["perf/cpu_memory_used_gb"] = psutil.virtual_memory().used / (1024**3)
+            metrics = self.actor.update_policy(data=data)
 
             self.lr_scheduler.step()
             lr = self.lr_scheduler.get_last_lr()[0]
@@ -507,16 +515,7 @@ class FSDPWorker(Worker):
 
         with self.ulysses_sharding_manager:
             data = self.ulysses_sharding_manager.preprocess_data(data=data)
-            with Timer(name="update_supervised", logger=None) as timer:
-                metrics = self.actor.update_supervised(data=data)
-
-            delta_time = timer.last
-            global_num_tokens = data.meta_info.get("global_token_num", [])
-            estimated_flops, promised_flops = self.flops_counter.estimate_flops(global_num_tokens, delta_time)
-            metrics["perf/mfu_actor_aux"] = estimated_flops / max(promised_flops * self.world_size, 1e-8)
-            metrics["perf/max_memory_allocated_gb_aux"] = (
-                torch.cuda.max_memory_allocated() - self.rollout_sharding_manager.freed_bytes
-            ) / (1024**3)
+            metrics = self.actor.update_supervised(data=data)
 
             output = DataProto(
                 non_tensor_batch={
@@ -648,15 +647,7 @@ class FSDPWorker(Worker):
 
         with self.ulysses_sharding_manager:
             data = self.ulysses_sharding_manager.preprocess_data(data=data)
-            with Timer(name="update_critic", logger=None) as timer:
-                metrics = self.critic.update_critic(data=data)
-
-            delta_time = timer.last
-            global_num_tokens = data.meta_info["global_token_num"]
-            estimated_flops, promised_flops = self.flops_counter.estimate_flops(global_num_tokens, delta_time)
-            metrics["perf/mfu_critic"] = (
-                estimated_flops * self.config.actor.ppo_epochs / (promised_flops * self.world_size)
-            )
+            metrics = self.critic.update_critic(data=data)
 
             self.lr_scheduler.step()
             lr = self.lr_scheduler.get_last_lr()[0]

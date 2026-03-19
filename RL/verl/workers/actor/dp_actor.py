@@ -15,8 +15,10 @@
 Implement Actor
 """
 
+import importlib
 import os
 from collections import defaultdict
+from functools import lru_cache
 from typing import Any, Dict, Optional
 
 import torch
@@ -25,7 +27,6 @@ from einops import rearrange
 from ray.experimental.tqdm_ray import tqdm
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-from transformers.modeling_flash_attention_utils import index_first_axis, pad_input, unpad_input
 
 from ...protocol import DataProto
 from ...trainer import core_algos
@@ -37,6 +38,19 @@ from .config import ActorConfig
 
 
 __all__ = ["DataParallelPPOActor"]
+
+
+@lru_cache(maxsize=1)
+def _get_flash_attn_padding_ops():
+    try:
+        bert_padding = importlib.import_module("flash_attn.bert_padding")
+    except ModuleNotFoundError as exc:  # pragma: no cover - runtime dependent
+        raise RuntimeError(
+            "padding_free=True requires flash-attn. Install flash-attn or set "
+            "worker.actor.padding_free=false in the RL config."
+        ) from exc
+
+    return bert_padding.index_first_axis, bert_padding.pad_input, bert_padding.unpad_input
 
 
 class DataParallelPPOActor(BasePPOActor):
@@ -80,6 +94,7 @@ class DataParallelPPOActor(BasePPOActor):
                 )
 
         if self.config.padding_free:
+            index_first_axis, pad_input, unpad_input = _get_flash_attn_padding_ops()
             input_ids_rmpad, indices, *_ = unpad_input(
                 input_ids.unsqueeze(-1), attention_mask
             )  # input_ids_rmpad (total_nnz, ...)
@@ -350,12 +365,6 @@ class DataParallelPPOActor(BasePPOActor):
             for micro_batch in micro_batches:
                 model_inputs = {**micro_batch.batch, **micro_batch.non_tensor_batch}
                 loss, batch_metrics = self._compute_supervised_micro_batch(model_inputs)
-                kinds = micro_batch.non_tensor_batch.get("supervision_kind")
-                if kinds is not None and len(kinds) > 0:
-                    action_count = sum(1 for item in kinds if str(item) == "action")
-                    answer_count = sum(1 for item in kinds if str(item) == "answer")
-                    batch_metrics["aux/action_fraction"] = action_count / len(kinds)
-                    batch_metrics["aux/answer_fraction"] = answer_count / len(kinds)
                 (loss / gradient_accumulation).backward()
                 append_to_dict(metrics, batch_metrics)
 

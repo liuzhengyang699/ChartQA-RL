@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .config import ActorConfig, FSDPConfig, ModelConfig, OptimConfig, RefConfig
+from .config import ActorConfig, FSDPConfig, ModelConfig, OptimConfig, RLLoRAConfig, RefConfig
 
 
 __all__ = [
@@ -20,5 +20,6 @@ __all__ = [
     "FSDPConfig",
     "ModelConfig",
     "OptimConfig",
+    "RLLoRAConfig",
     "RefConfig",
 ]

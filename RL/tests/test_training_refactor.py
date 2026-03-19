@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,6 +24,7 @@ if str(PROJECT_ROOT / "RL") not in sys.path:
 try:
     from verl.trainer.metrics import compute_structured_metrics
     from verl.trainer.ray_trainer import RayPPOTrainer
+    from verl.tooluse.structured_chartqa import build_tool_answer_prompt, build_tool_answer_request
     from verl.utils.logger.logger import resolve_swanlab_log_dir
 except ModuleNotFoundError as exc:  # pragma: no cover - environment dependent
     raise unittest.SkipTest(f"Missing runtime dependency: {exc.name}")
@@ -87,13 +89,35 @@ class StructuredMetricsTest(unittest.TestCase):
 
 
 class SwanlabLoggerTest(unittest.TestCase):
-    def test_resolve_swanlab_log_dir_prefers_new_env_name(self):
-        with mock.patch.dict(os.environ, {"SWANLAB_LOG_DIR": "/tmp/new", "SWANLAB_DIR": "/tmp/old"}, clear=True):
+    def test_resolve_swanlab_log_dir_reads_single_supported_env_name(self):
+        with mock.patch.dict(os.environ, {"SWANLAB_LOG_DIR": "/tmp/new"}, clear=True):
             self.assertEqual(resolve_swanlab_log_dir(), "/tmp/new")
 
-    def test_resolve_swanlab_log_dir_falls_back_to_legacy_env_name(self):
-        with mock.patch.dict(os.environ, {"SWANLAB_DIR": "/tmp/old"}, clear=True):
-            self.assertEqual(resolve_swanlab_log_dir(), "/tmp/old")
+    def test_resolve_swanlab_log_dir_uses_default_when_env_missing(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(resolve_swanlab_log_dir(), "swanlab_log")
+
+
+class ToolAnswerPromptTest(unittest.TestCase):
+    def test_tool_answer_request_uses_single_edited_image(self):
+        edited_image = Image.new("RGB", (8, 8), color="black")
+        action_result = {
+            "decision": "tool",
+            "chart_axis": "x",
+            "edit_mode": "highlight",
+            "targets": ["A"],
+            "edited_image": edited_image,
+        }
+
+        prompt = build_tool_answer_prompt("What is the value for A?", action_result)
+        request = build_tool_answer_request("What is the value for A?", action_result)
+
+        self.assertIn("tool-focused chart image", prompt)
+        self.assertNotIn("two images", prompt)
+        self.assertEqual(request["prompt_text"], prompt)
+        self.assertEqual(len(request["images"]), 1)
+        self.assertIsNot(request["images"][0], edited_image)
+        self.assertEqual(request["images"][0].getpixel((0, 0)), edited_image.getpixel((0, 0)))
 
 
 class NoToolStructuredBatchTest(unittest.TestCase):
@@ -141,6 +165,142 @@ class NoToolStructuredBatchTest(unittest.TestCase):
         tool_call = trainer._generate_branch_outputs.call_args_list[1].args[0]
         self.assertEqual(len(baseline_call), 1)
         self.assertEqual(tool_call, [])
+
+
+class ToolStructuredBatchTest(unittest.TestCase):
+    def test_tool_mode_uses_only_edited_image_for_tool_answer(self):
+        trainer = RayPPOTrainer.__new__(RayPPOTrainer)
+        trainer.tokenizer = mock.Mock()
+        trainer.tokenizer.decode.return_value = json.dumps(
+            {
+                "decision": "tool",
+                "chart_axis": "x",
+                "edit_mode": "highlight",
+                "targets": ["A"],
+            }
+        )
+        trainer.config = SimpleNamespace(algorithm=SimpleNamespace(enable_tool_branch=True))
+        trainer._trace_enable = False
+        trainer._trace_dir = None
+        trainer._trace_max_steps = 0
+        trainer.global_step = 1
+        trainer._ensure_image_cache = mock.Mock()
+        trainer._load_original_image = mock.Mock(return_value=Image.new("RGB", (8, 8), color="white"))
+        trainer._generate_branch_outputs = mock.Mock(
+            side_effect=[
+                {0: {"text": "FINAL ANSWER: 42", "prompt_text": "baseline prompt"}},
+                {0: {"text": "FINAL ANSWER: 99", "prompt_text": "tool prompt"}},
+            ]
+        )
+
+        executed_result = {
+            "decision": "tool",
+            "valid": True,
+            "chart_axis": "x",
+            "edit_mode": "highlight",
+            "targets": ["A"],
+            "tool_executed": True,
+            "tool_exec_success": True,
+            "tool_error_code": "",
+            "edited_image": Image.new("RGB", (8, 8), color="black"),
+        }
+
+        with mock.patch("verl.trainer.ray_trainer.execute_validated_action", return_value=executed_result):
+            batch = DummyBatch()
+            processed_batch, stats = RayPPOTrainer._process_structured_chartqa_batch(trainer, batch)
+
+        self.assertTrue(bool(processed_batch.non_tensor_batch["tool_exec_success"][0]))
+        self.assertEqual(processed_batch.non_tensor_batch["tool_answer_text"][0], "FINAL ANSWER: 99")
+        self.assertEqual(processed_batch.non_tensor_batch["final_answer_text"][0], "FINAL ANSWER: 99")
+        self.assertEqual(processed_batch.non_tensor_batch["answer_prompt_text"][0], "tool prompt")
+        self.assertIn("tool-focused chart image", processed_batch.non_tensor_batch["tool_prompt_text"][0])
+        self.assertEqual(stats["tool_exec_success"], 1)
+
+        baseline_call = trainer._generate_branch_outputs.call_args_list[0].args[0]
+        tool_call = trainer._generate_branch_outputs.call_args_list[1].args[0]
+        self.assertEqual(len(baseline_call), 1)
+        self.assertEqual(len(tool_call), 1)
+        self.assertEqual(len(tool_call[0]["images"]), 1)
+        self.assertEqual(tool_call[0]["images"][0].getpixel((0, 0)), (0, 0, 0))
+
+
+class ReplayImageReconstructionTest(unittest.TestCase):
+    def test_reconstruct_answer_images_returns_only_edited_image_for_successful_tool(self):
+        trainer = RayPPOTrainer.__new__(RayPPOTrainer)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            figure_path = Path(tmpdir) / "figure.png"
+            Image.new("RGB", (8, 8), color="white").save(figure_path)
+            trainer._resolve_figure_path = mock.Mock(return_value=str(figure_path))
+
+            entry = {
+                "figure_path": str(figure_path),
+                "stored_image_path": "",
+                "query": "What is the value for A?",
+                "tool_metadata": {
+                    "decision": "tool",
+                    "tool_exec_success": True,
+                    "metadata_json": json.dumps(
+                        {
+                            "type": "v_bar",
+                            "x_values_bbox": {"A": [0, 0, 1, 1]},
+                            "y_values_bbox": {},
+                        }
+                    ),
+                    "targets_json": json.dumps(["A"]),
+                    "chart_axis": "x",
+                    "edit_mode": "highlight",
+                },
+            }
+            executed_result = {
+                "decision": "tool",
+                "valid": True,
+                "chart_axis": "x",
+                "edit_mode": "highlight",
+                "targets": ["A"],
+                "tool_executed": True,
+                "tool_exec_success": True,
+                "tool_error_code": "",
+                "edited_image": Image.new("RGB", (8, 8), color="black"),
+            }
+
+            with mock.patch("verl.trainer.ray_trainer.execute_validated_action", return_value=executed_result):
+                images = RayPPOTrainer._reconstruct_answer_images(trainer, entry)
+
+        self.assertEqual(len(images), 1)
+        self.assertEqual(images[0].getpixel((0, 0)), (0, 0, 0))
+
+    def test_reconstruct_answer_images_keeps_original_for_direct_and_failed_tool(self):
+        trainer = RayPPOTrainer.__new__(RayPPOTrainer)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            figure_path = Path(tmpdir) / "figure.png"
+            Image.new("RGB", (8, 8), color="white").save(figure_path)
+            trainer._resolve_figure_path = mock.Mock(return_value=str(figure_path))
+
+            direct_images = RayPPOTrainer._reconstruct_answer_images(
+                trainer,
+                {
+                    "figure_path": str(figure_path),
+                    "stored_image_path": "",
+                    "query": "What is the value for A?",
+                    "tool_metadata": {"decision": "direct", "tool_exec_success": False},
+                },
+            )
+            failed_images = RayPPOTrainer._reconstruct_answer_images(
+                trainer,
+                {
+                    "figure_path": str(figure_path),
+                    "stored_image_path": "",
+                    "query": "What is the value for A?",
+                    "tool_metadata": {"decision": "tool", "tool_exec_success": False},
+                },
+            )
+
+        self.assertEqual(len(direct_images), 1)
+        self.assertEqual(len(failed_images), 1)
+        self.assertEqual(direct_images[0].getpixel((0, 0)), (255, 255, 255))
+        self.assertEqual(failed_images[0].getpixel((0, 0)), (255, 255, 255))
 
 
 if __name__ == "__main__":

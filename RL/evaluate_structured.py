@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import sys
 from io import BytesIO
@@ -12,30 +11,22 @@ import torch
 from datasets import load_dataset
 from jinja2 import Template
 from PIL import Image
-from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
+from transformers import AutoConfig, AutoProcessor, Qwen3VLForConditionalGeneration
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 RL_ROOT = SCRIPT_DIR
 PROJECT_ROOT = RL_ROOT.parent
-LORA_ROOT = PROJECT_ROOT / "LoRA"
-if str(LORA_ROOT) not in sys.path:
-    sys.path.insert(0, str(LORA_ROOT))
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 if str(RL_ROOT) not in sys.path:
     sys.path.insert(0, str(RL_ROOT))
 
-_CONFIG_SPEC = importlib.util.spec_from_file_location("chartqa_lora_config", LORA_ROOT / "utils" / "config.py")
-if _CONFIG_SPEC is None or _CONFIG_SPEC.loader is None:
-    raise ImportError("Failed to load LoRA utils/config.py")
-_CONFIG_MODULE = importlib.util.module_from_spec(_CONFIG_SPEC)
-_CONFIG_SPEC.loader.exec_module(_CONFIG_MODULE)
-get_path_setting = _CONFIG_MODULE.get_path_setting
-load_path_config = _CONFIG_MODULE.load_path_config
-
+from config.runtime import get_path_setting, load_path_config
 from examples.reward_function.structured_chartqa import compute_structured_scores
 from verl.tooluse.structured_chartqa import (
     build_baseline_answer_prompt,
     build_generation_messages,
-    build_tool_answer_prompt,
+    build_tool_answer_request,
     execute_validated_action,
     parse_action_response,
     validate_action_payload,
@@ -45,7 +36,12 @@ from verl.tooluse.structured_chartqa import (
 def parse_args() -> argparse.Namespace:
     path_config, _ = load_path_config()
     parser = argparse.ArgumentParser(description="Evaluate structured ChartQA RL models.")
-    parser.add_argument("--model_path", type=Path, required=True)
+    parser.add_argument(
+        "--model_path",
+        type=Path,
+        required=True,
+        help="Merged full model path. RL-only LoRA checkpoints must be exported first via RL/merge_rl_lora.py.",
+    )
     parser.add_argument(
         "--data_file",
         type=Path,
@@ -79,10 +75,17 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_model(model_path: Path, device: str):
+    if (model_path / "adapter_config.json").exists() or (model_path / "metadata.json").exists():
+        raise ValueError(
+            "RL/evaluate_structured.py expects a merged full model directory. "
+            "Merge the RL adapter first with `python RL/merge_rl_lora.py`."
+        )
     processor = AutoProcessor.from_pretrained(str(model_path))
     processor.tokenizer.padding_side = "left"
+    config = AutoConfig.from_pretrained(str(model_path), trust_remote_code=False)
     model = Qwen3VLForConditionalGeneration.from_pretrained(
         str(model_path),
+        config=config,
         torch_dtype=torch.bfloat16 if device.startswith("cuda") else torch.float32,
         device_map="auto" if device.startswith("cuda") else None,
     )
@@ -154,18 +157,18 @@ def main() -> None:
         final_text = baseline_text
         answer_prompt = baseline_prompt
         if executed["decision"] == "tool" and executed["tool_exec_success"]:
-            tool_prompt = build_tool_answer_prompt(sample["query"], executed)
+            tool_request = build_tool_answer_request(sample["query"], executed)
             tool_text = decode_generation(
                 model,
                 processor,
-                build_generation_messages(tool_prompt, 2),
-                [image, executed["edited_image"]],
+                build_generation_messages(tool_request["prompt_text"], len(tool_request["images"])),
+                tool_request["images"],
                 device=args.device,
                 max_new_tokens=args.max_new_tokens_answer,
             )
             if tool_text:
                 final_text = tool_text
-                answer_prompt = tool_prompt
+                answer_prompt = tool_request["prompt_text"]
 
         tool_cost = 0.05 + 0.01 * max(0, len(validated["targets"]) - 1) if validated["decision"] == "tool" and validated["valid"] else 0.0
         record = {

@@ -15,11 +15,14 @@
 Implement Critic
 """
 
+import importlib
 import os
 from collections import defaultdict
+from functools import lru_cache
 from typing import Any, Dict
 
 import torch
+from einops import rearrange
 from ray.experimental.tqdm_ray import tqdm
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
@@ -33,13 +36,17 @@ from .base import BasePPOCritic
 from .config import CriticConfig
 
 
-try:
-    from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input
-except ImportError:
-    pass
-
-
 __all__ = ["DataParallelPPOCritic"]
+
+
+@lru_cache(maxsize=1)
+def _get_flash_attn_padding_ops():
+    try:
+        bert_padding = importlib.import_module("flash_attn.bert_padding")
+    except ModuleNotFoundError as exc:  # pragma: no cover - runtime dependent
+        raise RuntimeError("padding_free=True requires flash-attn. Install flash-attn to use this path.") from exc
+
+    return bert_padding.index_first_axis, bert_padding.pad_input, bert_padding.unpad_input
 
 
 class DataParallelPPOCritic(BasePPOCritic):
@@ -67,6 +74,7 @@ class DataParallelPPOCritic(BasePPOCritic):
                 )
 
         if self.config.padding_free:
+            index_first_axis, pad_input, unpad_input = _get_flash_attn_padding_ops()
             input_ids_rmpad, indices, *_ = unpad_input(
                 input_ids.unsqueeze(-1), attention_mask
             )  # input_ids_rmpad (total_nnz, ...)

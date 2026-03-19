@@ -9,7 +9,7 @@
 所有命令都默认从仓库根目录执行：
 
 ```bash
-cd /abs/path/to/chartqa-rl
+cd /abs/path/to/project
 ```
 
 ## 目录与关键脚本
@@ -35,21 +35,11 @@ cd /abs/path/to/chartqa-rl
 cp config/paths.example.json config/paths.json
 ```
 
-`config/paths.json` 负责模型、数据、缓存和输出目录；详细字段说明见 [`config/README.md`](../config/README.md)。LoRA 部分最常用的路径键如下：
+路径字段说明统一放在 [`config/README.md`](../config/README.md)。LoRA 主链实际会用到 `base_model_dir`、`chartqa_parquet_dir`、`hf_cache_dir`、`sft_root`、`sft_adapter_dir`、`sft_merged_dir` 和 `sft_eval_dir`。
 
-| 键 | 含义 |
-| --- | --- |
-| `base_model_dir` | 基础模型下载目录 |
-| `chartqa_parquet_dir` | ChartQA parquet 数据目录 |
-| `hf_cache_dir` | Hugging Face cache 目录 |
-| `sft_root` | SFT 主输出目录 |
-| `sft_adapter_dir` | 训练结束后保存的 adapter 目录 |
-| `sft_merged_dir` | merge 后完整模型目录 |
-| `sft_eval_dir` | 离线评测结果目录 |
+底层数据加载与答案归一化逻辑已经集中在 [`data/chartqa/`](../data/README.md)，LoRA 目录只保留训练、merge、评测和可视化入口。
 
-底层 ChartQA 数据加载、split 与答案匹配逻辑已经统一抽到 [`data/chartqa/`](../data/README.md)。LoRA 目录本身只保留训练、merge、评测和可视化入口。
-
-SFT 默认配置文件为 [`LoRA/configs/chartqa_qwen3vl4b.json`](./configs/chartqa_qwen3vl4b.json)，字段分组如下：
+默认配置文件是 [`LoRA/configs/chartqa_qwen3vl4b.json`](./configs/chartqa_qwen3vl4b.json)，字段分组如下：
 
 | 分组 | 内容 |
 | --- | --- |

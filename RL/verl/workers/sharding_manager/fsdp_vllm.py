@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import inspect
-from typing import Dict, Iterable, Tuple, Union
+from typing import Any, Dict, Iterable, Tuple, Union
 
 import torch
 import torch.distributed as dist
@@ -25,6 +25,7 @@ from vllm import LLM
 from vllm.distributed import parallel_state as vllm_ps
 
 from ...protocol import DataProto, all_gather_data_proto
+from ...rl_lora import iter_merged_weight_items
 from ...utils.model_utils import print_gpu_memory_usage
 from .base import BaseShardingManager
 
@@ -35,10 +36,12 @@ class FSDPVLLMShardingManager(BaseShardingManager):
         module: FSDP,
         inference_engine: LLM,
         device_mesh: DeviceMesh,
+        rl_lora_config: Any = None,
     ):
         self.module = module
         self.inference_engine = inference_engine
         self.device_mesh = device_mesh
+        self.rl_lora_config = rl_lora_config
 
         self.world_size = dist.get_world_size()
         self.tp_size = vllm_ps.get_tensor_model_parallel_world_size()
@@ -60,6 +63,10 @@ class FSDPVLLMShardingManager(BaseShardingManager):
     def _make_weight_iterator(
         self, actor_weights: Dict[str, Union[torch.Tensor, DTensor]]
     ) -> Iterable[Tuple[str, torch.Tensor]]:
+        if self.rl_lora_config is not None and getattr(self.rl_lora_config, "enable", False):
+            yield from iter_merged_weight_items(actor_weights, self.rl_lora_config)
+            return
+
         for name, tensor in actor_weights.items():
             yield name, tensor.full_tensor() if self.world_size != 1 else tensor
 

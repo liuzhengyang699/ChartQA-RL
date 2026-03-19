@@ -17,7 +17,7 @@ ActorRolloutRef config
 
 from dataclasses import dataclass, field
 
-from .actor import ActorConfig, FSDPConfig, ModelConfig, OptimConfig, RefConfig
+from .actor import ActorConfig, FSDPConfig, ModelConfig, OptimConfig, RLLoRAConfig, RefConfig
 from .critic import CriticConfig
 from .reward import RewardConfig
 from .rollout import RolloutConfig
@@ -29,6 +29,7 @@ __all__ = [
     "FSDPConfig",
     "ModelConfig",
     "OptimConfig",
+    "RLLoRAConfig",
     "RefConfig",
     "RewardConfig",
     "RolloutConfig",
