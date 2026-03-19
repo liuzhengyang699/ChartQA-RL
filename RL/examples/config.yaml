@@ -32,7 +32,7 @@ algorithm:
 worker:
   actor:
   #we can make it smaller
-    global_batch_size: 4
+    global_batch_size: 2
     #according to issue: https://github.com/hiyouga/EasyR1/issues/6
     #this reduces VRAM usage, we * 0.5
     micro_batch_size_per_device_for_update: 1
