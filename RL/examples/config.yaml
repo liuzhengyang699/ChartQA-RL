@@ -5,9 +5,9 @@ data:
   answer_key: answer
   image_key: images
   max_prompt_length: 2048
-  max_response_length: 512
+  max_response_length: 256
   #for rollout batch size this should be increased on larger GPU clusters
-  rollout_batch_size: 2
+  rollout_batch_size: 4
   val_batch_size: 32
   format_prompt: ./examples/format_prompt/chartQA_action.jinja
   override_chat_template: null
@@ -32,7 +32,7 @@ algorithm:
 worker:
   actor:
   #we can make it smaller
-    global_batch_size: 2
+    global_batch_size: 4
     #according to issue: https://github.com/hiyouga/EasyR1/issues/6
     #this reduces VRAM usage, we * 0.5
     micro_batch_size_per_device_for_update: 1
@@ -70,6 +70,7 @@ worker:
     temperature: 1
     top_p: 0.99
     gpu_memory_utilization: 0.4
+    max_num_batched_tokens: 4096
     enforce_eager: false
     enable_chunked_prefill: false
     tensor_parallel_size: 4
