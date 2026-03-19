@@ -49,7 +49,6 @@ cp config/paths.example.json config/paths.json
 | `logging` | `report_to`、`run_name`、SwanLab 相关配置 |
 | `eval` | 默认评测 split、设备、最大生成长度 |
 
-CLI 参数优先级高于 JSON 配置，也高于路径配置文件中的默认目录。
 
 ## 数据与模型准备
 
@@ -211,13 +210,6 @@ python LoRA/chartqa_eval.py \
 | Base | 72.0% | 84.7% | 90.6% |
 | SFT (LoRA) | 74.8% | 86.8% | 92.0% |
 
-如果你已经有 base 和 SFT 的评测 JSON，可以重新生成概览图：
-
-```bash
-python LoRA/visualize_metrics.py \
-  --base-metrics /abs/path/to/base_test_metrics.json \
-  --adapter-metrics /abs/path/to/adapter_test_metrics.json
-```
 
 训练曲线：
 
@@ -234,9 +226,6 @@ python LoRA/visualize_metrics.py \
   <tr>
     <td align="center"><img src="../assets/lora_metrics_overview.svg" alt="LoRA Overview" width="100%"></td>
   </tr>
-  <tr>
-    <td align="center"><img src="../assets/lora_metrics_delta.svg" alt="LoRA Delta" width="100%"></td>
-  </tr>
 </table>
 
 ## 输出产物
@@ -252,14 +241,14 @@ python LoRA/visualize_metrics.py \
 
 ## 常见问题
 
-**1. 为什么脚本提示找不到 `config/paths.json`？**  
+**1. 为什么脚本提示找不到 `config/paths.json`？**
 先执行 `cp config/paths.example.json config/paths.json`，再按本机路径修改。
 
-**2. `sft_root`、`sft_adapter_dir`、`sft_merged_dir` 是什么关系？**  
+**2. `sft_root`、`sft_adapter_dir`、`sft_merged_dir` 是什么关系？**
 `sft_root` 是一次 SFT 运行的主目录，训练会在其中创建 `checkpoints/`、`adapter/`、`merged/`。`sft_adapter_dir` 和 `sft_merged_dir` 是路径配置里的默认落点，分别指向这个目录下的 `adapter` 和 `merged`。
 
-**3. 什么时候评测 adapter，什么时候评测 merged model？**  
+**3. 什么时候评测 adapter，什么时候评测 merged model？**
 想做推理或作为 RL 初始化模型时，优先使用 merged model。想单独验证 LoRA 权重，也可以用 `--adapter_path` 加基础模型一起评测。
 
-**4. 显存不足怎么办？**  
+**4. 显存不足怎么办？**
 优先减小 `per_device_train_batch_size`、增加 `gradient_accumulation_steps`，必要时缩短 `max_length` 或降低评测时的 `max_new_tokens`。

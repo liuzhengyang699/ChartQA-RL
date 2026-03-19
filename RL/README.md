@@ -69,7 +69,6 @@ uv pip install https://github.com/vllm-project/vllm/releases/download/v0.11.2/vl
 pip install -r requirements.txt
 ```
 
-旧的 `chartqa-rl` 环境现在视为 legacy；RL 主链默认以 `chartqa` 为基线环境。
 
 运行前先准备路径配置：
 
@@ -431,20 +430,20 @@ python RL/merge_rl_lora.py \
 
 ## 常见问题
 
-**1. 为什么训练一开始就报 `judge_info.json not found`？**  
+**1. 为什么训练一开始就报 `judge_info.json not found`？**
 默认 reward 启用了 Judge。先执行 `cp RL/judge/judge_info.example.json RL/judge/judge_info.json`，再填写本地 judge 或 OpenRouter 信息。
 
-**2. 不安装 `flash-attn` 能跑吗？**  
+**2. 不安装 `flash-attn` 能跑吗？**
 能。当前默认 `padding_free=false`，会走 `sdpa`。只是训练速度会更慢，显存压力也更大。
 
-**3. `Model path does not exist` 是什么意思？**  
+**3. `Model path does not exist` 是什么意思？**
 `RL/train.sh` 默认从 `sft_merged_dir` 读取初始化模型。先完成 SFT merge，或者显式传入 `MODEL_PATH=/abs/path/to/merged_model`。
 
-**4. 为什么 `RL/evaluate_structured.py` 不能直接读取 `global_step_*/actor`？**  
+**4. 为什么 `RL/evaluate_structured.py` 不能直接读取 `global_step_*/actor`？**
 因为当前 RL checkpoint 只保存 adapter，不保存完整推理模型。先运行 `python RL/merge_rl_lora.py ...` 导出 merged full model，再进行评测。
 
-**5. 为什么工具调用很多，但收益不明显？**  
+**5. 为什么工具调用很多，但收益不明显？**
 先看 `ToolEffectivenessRate`、`AvgToolGain`、`InvalidActionRate`。如果工具调用率高但收益低，通常说明动作空间过于激进、Judge 设置不稳定，或者 baseline 已经足够强。
 
-**6. 显存不足怎么办？**  
+**6. 显存不足怎么办？**
 优先减小 `MICRO_BATCH_SIZE`、`GLOBAL_BATCH_SIZE`、`ROLLOUT_BATCH_SIZE`，必要时降低 `data.max_prompt_length`、`data.max_response_length`，或者切到更大的 GPU。
